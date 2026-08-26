@@ -23,5 +23,5 @@ class RuntimeBootstrapSmokeTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
-if __name__ = "__main__":
+if __name__ == "__main__":
     unittest.main()
