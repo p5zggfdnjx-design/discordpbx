@@ -2,6 +2,8 @@ name: Publish DiscordPBX release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
