@@ -93,7 +93,12 @@ restore_runtime_state() {
 }
 
 restore_code() {
-  "${RSYNC_BASE[@]}" --delete --exclude 'data/' --exclude '.env' --exclude '.git/' "$ROLLBACK/" "$PROJECT_DIR/" || true
+  "${RSYNC_BASE[@]}" --delete \
+    --exclude 'data/' \
+    --exclude '.env' \
+    --exclude '.git/' \
+    --exclude 'docker-compose.override.yml' \
+    "$ROLLBACK/" "$PROJECT_DIR/" || true
 }
 
 rollback_and_fail() {
@@ -107,8 +112,14 @@ rollback_and_fail() {
   fail "$reason; old code and persistent state restored"
 }
 
-# Preserve application code for rollback. Runtime state is intentionally excluded.
-"${RSYNC_BASE[@]}" --delete --exclude 'data/' --exclude '.env' --exclude '.git/' "$PROJECT_DIR/" "$ROLLBACK/"
+# Preserve application code for rollback. Runtime state and host-local Compose
+# settings are intentionally excluded from release replacement.
+"${RSYNC_BASE[@]}" --delete \
+  --exclude 'data/' \
+  --exclude '.env' \
+  --exclude '.git/' \
+  --exclude 'docker-compose.override.yml' \
+  "$PROJECT_DIR/" "$ROLLBACK/"
 
 write_status "validating" "$TARGET_VERSION" "Validating and extracting update"
 python3 - "$PENDING" "$EXTRACT" <<'PY'
@@ -141,8 +152,13 @@ for req in bot.py config.py docker-compose.yml upgrade-from-current.sh; do
 done
 
 write_status "installing" "$TARGET_VERSION" "Replacing application code; persistent settings remain mounted"
-"${RSYNC_BASE[@]}" --delete --exclude 'data/' --exclude '.env' --exclude '.git/' "$SOURCE/" "$PROJECT_DIR/"
-chmod +x "$PROJECT_DIR/upgrade-from-current.sh" "$PROJECT_DIR/install-managed-updater.sh" "$PROJECT_DIR/bootstrap-update.sh" "$PROJECT_DIR/updater/managed-update-agent.sh" 2>/dev/null || true
+"${RSYNC_BASE[@]}" --delete \
+  --exclude 'data/' \
+  --exclude '.env' \
+  --exclude '.git/' \
+  --exclude 'docker-compose.override.yml' \
+  "$SOURCE/" "$PROJECT_DIR/"
+chmod +x "$PROJECT_DIR/upgrade-from-current.sh" "$PROJECT_DIR/install-managed-updater.sh" "$PROJECT_DIR/bootstrap-update.sh" "$PROJECT_DIR/bootstrap-managed-install.sh" "$PROJECT_DIR/updater/managed-update-agent.sh" 2>/dev/null || true
 
 cd "$PROJECT_DIR"
 if ! docker compose config >/dev/null; then
