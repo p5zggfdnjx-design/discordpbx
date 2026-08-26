@@ -11,7 +11,8 @@ class RuntimeBootstrapSmokeTests(unittest.TestCase):
             "runpy.run_path=lambda *a,**k: None; "
             "import bootstrap, webui; "
             "assert getattr(webui.WebControlServer, '_v333_updater_hotfix_applied', False); "
-            "assert getattr(webui.WebControlServer, '_matrix_background_applied', False)"
+            "assert getattr(webui.WebControlServer, '_matrix_background_applied', False); "
+            "assert getattr(webui.WebControlServer, '_prefix_blocks_applied', False)"
         )
         proc = subprocess.run(
             [sys.executable, "-c", code],
@@ -22,5 +23,5 @@ class RuntimeBootstrapSmokeTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
-if __name__ == "__main__":
+if __name__ = "__main__":
     unittest.main()
