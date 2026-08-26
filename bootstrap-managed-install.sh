@@ -265,7 +265,7 @@ for _ in $(seq 1 60); do
   state="$(docker inspect "$CONTAINER_NAME" --format '{{.State.Status}}' 2>/dev/null || true)"
   health="$(docker inspect "$CONTAINER_NAME" --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>/dev/null || true)"
   if [[ "$state" == "running" && ( "$health" == "healthy" || -z "$health" ) ]]; then
-    if docker exec "$CONTAINER_NAME" python - <<'PY' >/dev/null 2>&1
+    if docker exec -i "$CONTAINER_NAME" python - <<'PY' >/dev/null 2>&1
 import socket
 socket.getaddrinfo('discord.com',443)
 PY
@@ -291,12 +291,12 @@ chmod +x "$INSTALL_DIR/install-managed-updater.sh" "$INSTALL_DIR/bootstrap-updat
 
 log "Managed DiscordPBX is ready"
 docker compose ps
-VERSION="$(docker exec "$CONTAINER_NAME" python - <<'PY' 2>/dev/null || true
+VERSION="$(docker exec -i "$CONTAINER_NAME" python - <<'PY' 2>/dev/null || true
 from config import Config
 print(Config.from_env().version)
 PY
 )"
-CONTACTS="$(docker exec "$CONTAINER_NAME" python - <<'PY' 2>/dev/null || true
+CONTACTS="$(docker exec -i "$CONTAINER_NAME" python - <<'PY' 2>/dev/null || true
 from config import Config
 from contacts import ContactsStore
 c=Config.from_env(); print(len(ContactsStore(c.contacts_file).list()))
