@@ -445,10 +445,11 @@ class WebControlServer(LegacyWebControlServer):
             admin_id = str(body.get("system_admin_discord_id", "")).strip()
             if admin_id and not admin_id.isdigit():
                 raise ValueError("system administrator Discord User ID must be numeric")
+            public_base_url = self.auth.normalize_public_base_url(str(body.get("public_base_url", "")), require_https=True)
             settings = {
                 "discord_client_id": str(body.get("discord_client_id", "")).strip(),
                 "system_admin_discord_ids": [admin_id] if admin_id else [],
-                "public_base_url": str(body.get("public_base_url", "")).strip().rstrip("/"),
+                "public_base_url": public_base_url,
                 "asterisk_host": str(body.get("ami_host", self.config.ami_host)).strip(),
                 "asterisk_port": int(body.get("ami_port", self.config.ami_port) or 5038),
                 "asterisk_user": str(body.get("ami_user", self.config.ami_user)).strip(),
@@ -503,12 +504,17 @@ class WebControlServer(LegacyWebControlServer):
     async def discord_callback(self, request):
         state = str(request.query.get("state", "")); code = str(request.query.get("code", ""))
         return_to = self.db.consume_oauth_state(state)
-        if return_to is None or not code:
+        discord_error = str(request.query.get("error_description") or request.query.get("error") or "").strip()
+        if return_to is None:
             return web.Response(text="Discord OAuth state/code is invalid or expired.", status=400)
+        if discord_error:
+            return web.Response(text=f"Discord sign-in was not completed: {html.escape(discord_error)}", status=400)
+        if not code:
+            return web.Response(text="Discord OAuth did not return an authorization code. Try signing in again.", status=400)
         try:
             user = await self.auth.exchange_discord_code(request, code)
             session = await self.auth.create_discord_session(request, user)
-            response = web.HTTPFound(return_to if return_to.startswith("/") else "/")
+            response = web.HTTPFound(self.auth.safe_return_to(return_to))
             self.auth.set_session_cookie(response, session, request)
             raise response
         except PermissionError as exc:
@@ -1431,12 +1437,26 @@ class WebControlServer(LegacyWebControlServer):
     async def system_oauth_status(self, request):
         await self._system_admin(request)
         base = self.auth.public_base_url(request)
-        redirect = (base.rstrip("/") + "/auth/discord/callback") if base else ""
+        try:
+            redirect = self.auth.discord_redirect_uri(request)
+            public_url_valid = True
+            public_url_error = ""
+        except (ValueError, RuntimeError) as exc:
+            redirect = ""
+            public_url_valid = False
+            public_url_error = str(exc)
         client_id = self.auth.client_id()
         client_secret = self.auth.client_secret()
         bot_token = self.secret_store.get("discord_bot_token", self.config.discord_token)
         members_intent = bool(getattr(getattr(self.bot, "intents", None), "members", False))
-        return web.json_response({"ok":True,"ready":bool(base.startswith("https://") and client_id and client_secret and bot_token and members_intent and self.bot.is_ready()),"public_base_url":base,"redirect_uri":redirect,"client_id":client_id,"client_id_configured":bool(client_id),"client_secret_configured":bool(client_secret),"bot_token_configured":bool(bot_token),"discord_gateway_ready":bool(self.bot.is_ready()),"server_members_intent_requested":members_intent,"system_admin_discord_ids":sorted(self.auth.system_admin_discord_ids()),"auth_mode":self.config.web_auth_mode})
+        problems=[]
+        if not public_url_valid: problems.append(public_url_error)
+        if not client_id: problems.append("Discord Application / Client ID is missing")
+        if not client_secret: problems.append("Discord OAuth client secret is missing")
+        if not bot_token: problems.append("Discord bot token is missing")
+        if not members_intent: problems.append("Server Members Intent is not enabled/requested")
+        if not self.bot.is_ready(): problems.append("Discord bot gateway is not connected")
+        return web.json_response({"ok":True,"ready":not problems,"problems":problems,"public_base_url":base,"public_url_valid":public_url_valid,"public_url_error":public_url_error,"redirect_uri":redirect,"client_id":client_id,"client_id_configured":bool(client_id),"client_secret_configured":bool(client_secret),"bot_token_configured":bool(bot_token),"discord_gateway_ready":bool(self.bot.is_ready()),"server_members_intent_requested":members_intent,"system_admin_discord_ids":sorted(self.auth.system_admin_discord_ids()),"auth_mode":self.config.web_auth_mode})
 
     async def system_settings_update(self, request):
         actor=await self._system_admin(request);body=await request.json();self.db.save_revision("before system settings change",actor["user_id"],actor["name"])
@@ -1446,6 +1466,11 @@ class WebControlServer(LegacyWebControlServer):
             if repo and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
                 return web.json_response({"ok":False,"error":"GitHub repository must be owner/repository"},status=400)
             body["github_repo"]=repo
+        if "public_base_url" in body:
+            try:
+                body["public_base_url"]=self.auth.normalize_public_base_url(str(body.get("public_base_url", "")), require_https=True)
+            except ValueError as exc:
+                return web.json_response({"ok":False,"error":str(exc)},status=400)
         if "system_admin_discord_ids" in body:
             raw=body.get("system_admin_discord_ids",[])
             if isinstance(raw,str): raw=[x.strip() for x in raw.replace("\n",",").split(",") if x.strip()]
@@ -1599,7 +1624,7 @@ class WebControlServer(LegacyWebControlServer):
         return headers
 
     async def _github_latest_release(self) -> dict[str, Any]:
-        repo=str(self.db.get_setting("github_repo", "") or "").strip()
+        repo=str(self.db.get_setting("github_repo", "") or self.config.github_repo or "").strip()
         if not repo: raise ValueError("configure a GitHub release repository first (owner/repository)")
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo): raise ValueError("invalid GitHub repository setting")
         url=f"https://api.github.com/repos/{repo}/releases/latest"
@@ -1648,7 +1673,7 @@ class WebControlServer(LegacyWebControlServer):
 
     async def system_update_github_status(self, request):
         await self._system_admin(request)
-        repo=str(self.db.get_setting("github_repo", "") or "").strip()
+        repo=str(self.db.get_setting("github_repo", "") or self.config.github_repo or "").strip()
         base={"ok":True,"configured":bool(repo),"repo":repo,"token_configured":self.secret_store.has("github_release_token"),"current_version":self.config.version}
         if not repo:return web.json_response(base)
         try:

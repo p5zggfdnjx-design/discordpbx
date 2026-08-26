@@ -94,5 +94,5 @@ fi
 echo
 docker compose ps
 echo
-echo "PBX v3.2.9 is healthy. Startup log tail:"
+echo "PBX v3.3.0 is healthy. Startup log tail:"
 docker compose logs --tail=80

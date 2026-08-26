@@ -11,7 +11,7 @@ import secrets
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import aiohttp
 from aiohttp import web
@@ -81,22 +81,56 @@ class AuthService:
     def client_secret(self) -> str:
         return self.secret_store.get("discord_oauth_client_secret", self.config.discord_client_secret)
 
+    @staticmethod
+    def normalize_public_base_url(value: str, *, require_https: bool = False) -> str:
+        raw = str(value or "").strip().rstrip("/")
+        if not raw:
+            return ""
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Public URL must include http:// or https:// and a hostname")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("Public URL must be an origin only, without credentials, query text, or a fragment")
+        if parsed.path not in {"", "/"}:
+            raise ValueError("Public URL must not include a path; use an origin such as https://pbx.example.com")
+        host = (parsed.hostname or "").lower()
+        if require_https and parsed.scheme.lower() != "https" and host not in {"localhost", "127.0.0.1", "::1"}:
+            raise ValueError("Discord sign-in requires an HTTPS Public URL (HTTP is allowed only for localhost)")
+        return urlunsplit((parsed.scheme.lower(), parsed.netloc, "", "", "")).rstrip("/")
+
+    @staticmethod
+    def safe_return_to(value: str) -> str:
+        target = str(value or "/").strip()
+        return target if target.startswith("/") and not target.startswith("//") else "/"
+
     def public_base_url(self, request: web.Request | None = None) -> str:
         configured = str(self.db.get_setting("public_base_url", "") or self.config.public_base_url or "").rstrip("/")
         if configured:
-            return configured
+            try:
+                return self.normalize_public_base_url(configured)
+            except ValueError:
+                return configured
         if request is None:
             return ""
-        proto = request.headers.get("X-Forwarded-Proto", request.scheme) if self.config.trusted_proxy else request.scheme
-        host = request.headers.get("X-Forwarded-Host", request.host) if self.config.trusted_proxy else request.host
+        proto = request.scheme
+        host = request.host
+        if self.config.trusted_proxy:
+            proto = request.headers.get("X-Forwarded-Proto", proto).split(",", 1)[0].strip() or proto
+            host = request.headers.get("X-Forwarded-Host", host).split(",", 1)[0].strip() or host
         return f"{proto}://{host}".rstrip("/")
+
+    def discord_redirect_uri(self, request: web.Request) -> str:
+        base = self.normalize_public_base_url(self.public_base_url(request), require_https=True)
+        if not base:
+            raise RuntimeError("Public URL is not configured; set it to the HTTPS address used to open the PBX panel")
+        return base + "/auth/discord/callback"
 
     def discord_login_url(self, request: web.Request, return_to: str = "/") -> str:
         client_id = self.client_id()
         if not client_id:
             raise RuntimeError("Discord OAuth client ID is not configured")
-        state = self.db.create_oauth_state(return_to)
-        redirect_uri = self.public_base_url(request) + "/auth/discord/callback"
+        redirect_uri = self.discord_redirect_uri(request)
+        state = self.db.create_oauth_state(self.safe_return_to(return_to))
         params = {
             "client_id": client_id,
             "response_type": "code",
@@ -122,7 +156,7 @@ class AuthService:
         client_id = self.client_id(); client_secret = self.client_secret()
         if not client_id or not client_secret:
             raise RuntimeError("Discord OAuth client credentials are not configured")
-        redirect_uri = self.public_base_url(request) + "/auth/discord/callback"
+        redirect_uri = self.discord_redirect_uri(request)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as session:
             async with session.post("https://discord.com/api/v10/oauth2/token", data={
                 "client_id": client_id, "client_secret": client_secret,
@@ -131,7 +165,11 @@ class AuthService:
             }, headers={"Content-Type": "application/x-www-form-urlencoded"}) as resp:
                 body = await resp.json(content_type=None)
                 if resp.status >= 400:
-                    raise RuntimeError(f"Discord OAuth token exchange failed ({resp.status})")
+                    reason = str(body.get("error_description") or body.get("error") or "unknown Discord error")
+                    log.warning("Discord OAuth token exchange failed (%s): %s; redirect_uri=%s", resp.status, reason, redirect_uri)
+                    raise RuntimeError(
+                        f"Discord rejected the sign-in ({reason}). Confirm this exact redirect URI in the Discord Developer Portal: {redirect_uri}"
+                    )
             access_token = str(body.get("access_token", ""))
             if not access_token:
                 raise RuntimeError("Discord OAuth did not return an access token")

@@ -264,7 +264,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 @bot.tree.command(name="ping", description="Check whether the PBX bot is alive.")
 @require_capability("panel_access")
 async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message(f"PBX v3.2.9 · {round(bot.latency * 1000)} ms", ephemeral=True)
+    await interaction.response.send_message(f"PBX v3.3.0 · {round(bot.latency * 1000)} ms", ephemeral=True)
 
 
 pbx = app_commands.Group(name="pbx", description="Control this Discord workspace's PBX bridge")

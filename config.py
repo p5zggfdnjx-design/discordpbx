@@ -85,6 +85,7 @@ class Config:
     web_password: str
     public_base_url: str
     trusted_proxy: bool
+    github_repo: str
 
     log_level: str
     test_audio: str
@@ -97,7 +98,7 @@ class Config:
         if web_auth_mode not in {"discord", "basic", "none", "hybrid"}:
             web_auth_mode = "discord"
         return cls(
-            version="3.2.9",
+            version="3.3.0",
             data_dir=data_dir,
             discord_token=os.getenv("DISCORD_TOKEN", "").strip(),
             discord_client_id=os.getenv("DISCORD_CLIENT_ID", "").strip(),
@@ -140,6 +141,7 @@ class Config:
             web_password=os.getenv("WEB_PASSWORD", "").strip(),
             public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/"),
             trusted_proxy=_bool("TRUST_PROXY_HEADERS", True),
+            github_repo=os.getenv("GITHUB_REPO", "p5zggfdnjx-design/discordpbx").strip() or "p5zggfdnjx-design/discordpbx",
 
             log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
             test_audio=os.getenv("TEST_AUDIO", "/app/assets/test.mp3").strip(),

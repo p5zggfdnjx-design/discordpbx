@@ -1188,7 +1188,7 @@ class BridgeManager:
 
         outbound_pending = self.outbound_pending()
         return {
-            "version": getattr(self.config, "version", "3.2.9"),
+            "version": getattr(self.config, "version", "3.3.0"),
             "discord_ready": bool(self.bot.is_ready()),
             "discord_connected": any(x["connected"] for x in workspace_voice),
             "discord_channel": next((x["channel"] for x in workspace_voice if x["connected"]), None),

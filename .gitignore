@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 assets/*
 !assets/.gitkeep
+!assets/retro-mail-chime.wav

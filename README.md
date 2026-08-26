@@ -1,6 +1,10 @@
-# Discord ↔ FreePBX Bridge v3.2.9
+# Discord ↔ FreePBX Bridge v3.3.0
 
-v3.2.9 keeps the v3 multi-workspace/RBAC architecture and the v2 telephony bridge/persistent formats, while restoring the denser operator-console presentation from the v2 line. Multi-Discord workspaces, Discord sign-in and role authorization, presence-aware inbound routing, attributable audit/history, realtime events, setup/administration pages, health/backup tooling and stronger tenant isolation remain in place.
+v3.3.0 makes this repository the default update source, turns the manual GitHub workflow into a one-click release publisher, and hardens Discord OAuth URL/callback validation. It keeps the v3 multi-workspace/RBAC architecture and the v2 telephony bridge/persistent formats.
+
+> **v3.3.0 canonical updates:** new installs default to `p5zggfdnjx-design/discordpbx`, so **Settings → Updates → Update latest from GitHub** works without entering a repository or token while this repository remains public. The GitHub **Publish DiscordPBX release** workflow now publishes or refreshes the release asset when run manually, not only when a tag was pushed.
+
+> **v3.3.0 Discord sign-in repair:** OAuth authorization and token exchange now use one validated callback builder, forwarded proxy headers are normalized, unsafe return URLs are rejected, Discord cancellation/errors are reported clearly, and the OAuth readiness API lists the exact missing configuration. Public URLs must be an HTTPS origin with no path, query, credentials, or fragment.
 
 
 > **v3.2.9 GitHub pull updater:** system administrators can configure an `owner/repository` under **Settings → Updates**, optionally store a token for a private repository, check the latest GitHub Release, and press **Update latest from GitHub**. The bridge downloads the release ZIP through GitHub's Releases API, validates it as a DiscordPBX package, verifies its SHA-256 internally, stages it into the existing managed updater, and then uses the same backup/health-check/automatic-rollback path as manual ZIP updates. Manual ZIP upload remains available as a fallback.
@@ -199,6 +203,8 @@ After v3.2 is running:
 
 The OAuth flow itself requests only `identify`; the bridge does not trust a user-supplied guild list. It resolves guild membership and role capabilities through the installed bot, server-side, on the configured workspaces.
 
+If Discord sign-in still fails, compare the callback shown under **Settings → Discord OAuth** character-for-character with the redirect stored in Discord Developer Portal. The Public URL must look like `https://pbx.example.com`—do not include `/login`, `/auth/discord/callback`, a trailing path, or a query string. If the PBX is behind a reverse proxy, forward `Host` and `X-Forwarded-Proto: https` and keep `TRUST_PROXY_HEADERS=true`. A user who authenticates successfully but receives “does not have a configured PBX panel role” must either be added under **System-admin Discord User IDs** or receive a mapped PBX role in at least one workspace.
+
 ## Discord Developer Portal
 
 For Discord OAuth at `https://discordpbx.example.com`, add the exact redirect URI:
@@ -250,12 +256,12 @@ OLD=$(docker inspect discord-pbx --format '{{ index .Config.Labels "com.docker.c
 echo "$OLD"
 ```
 
-After `discord-freepbx-bridge-v3.2.9.zip` has been uploaded to `/home/builder/Downloads`, the included upgrade helper can copy the running installation's `.env` and persistent `data/`, validate the new Compose file **before** stopping the current container, then build/start v3:
+After `discord-freepbx-bridge-v3.3.0.zip` has been uploaded to `/home/builder/Downloads`, the included upgrade helper can copy the running installation's `.env` and persistent `data/`, validate the new Compose file **before** stopping the current container, then build/start v3:
 
 ```bash
 cd /home/builder/Downloads
-unzip -o discord-freepbx-bridge-v3.2.9.zip
-cd discord-freepbx-bridge-v3.2.9
+unzip -o discord-freepbx-bridge-v3.3.0.zip
+cd discord-freepbx-bridge-v3.3.0
 ./upgrade-from-current.sh
 ```
 
@@ -263,13 +269,13 @@ The manual equivalent is:
 
 ```bash
 cd /home/builder/Downloads
-unzip -o discord-freepbx-bridge-v3.2.9.zip
+unzip -o discord-freepbx-bridge-v3.3.0.zip
 
-cp "$OLD/.env" /home/builder/Downloads/discord-freepbx-bridge-v3.2.9/.env
-mkdir -p /home/builder/Downloads/discord-freepbx-bridge-v3.2.9/data
-cp -a "$OLD/data/." /home/builder/Downloads/discord-freepbx-bridge-v3.2.9/data/
+cp "$OLD/.env" /home/builder/Downloads/discord-freepbx-bridge-v3.3.0/.env
+mkdir -p /home/builder/Downloads/discord-freepbx-bridge-v3.3.0/data
+cp -a "$OLD/data/." /home/builder/Downloads/discord-freepbx-bridge-v3.3.0/data/
 
-cd /home/builder/Downloads/discord-freepbx-bridge-v3.2.9
+cd /home/builder/Downloads/discord-freepbx-bridge-v3.3.0
 docker compose config >/dev/null
 docker rm -f discord-pbx 2>/dev/null || true
 docker compose up -d --build
@@ -284,7 +290,7 @@ If your copied v2 `.env` uses `WEB_AUTH_MODE=basic`, Basic auth remains availabl
 
 ### One-time managed updater setup
 
-After v3.2.9 is running in its permanent directory, install the host watcher once. A normal standalone NAS install can use:
+After v3.3.0 is running in its permanent directory, install the host watcher once. A normal standalone NAS install can use:
 
 ```bash
 cd /opt/discord-pbx/current  # or your actual permanent project directory
@@ -294,6 +300,15 @@ sudo ./install-managed-updater.sh
 If you use the included builder → NAS migration kit, its NAS preparation step installs the watcher ahead of time and migration marks it ready automatically.
 
 Then future release ZIPs can be installed from **Settings → Updates** without SSH. The web container only stages a validated ZIP and an update request in `data/updates/`; the root-owned systemd updater performs the host/Docker changes.
+
+### One-click GitHub release and PBX update
+
+1. Merge the version commit into `main`.
+2. On GitHub, open **Actions → Publish DiscordPBX release → Run workflow**. Leave the version blank to read it from `config.py`.
+3. The workflow creates or refreshes `discord-freepbx-bridge-v<VERSION>.zip` and its SHA-256 file in the matching GitHub Release.
+4. In the PBX console, open **Settings → Updates** and press **Update latest from GitHub**.
+
+The canonical public repository is already `p5zggfdnjx-design/discordpbx`, so no GitHub token is needed. Set `GITHUB_REPO` only when deploying a fork; private repositories also require a read-capable release token in the PBX secret store.
 
 ## Reverse proxy
 
