@@ -6,6 +6,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from request_compat import install_cached_request_body_compat
+
+# webui.py imports EventBus before it creates the aiohttp application. Install the
+# compatibility hook here so every request handler sees cached JSON bodies after
+# the audit middleware has inspected them.
+install_cached_request_body_compat()
+
 
 @dataclass
 class EventBus:
