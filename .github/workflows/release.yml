@@ -32,7 +32,7 @@ jobs:
       - name: Validate updater scripts
         shell: bash
         run: |
-          bash -n bootstrap-update.sh install-managed-updater.sh upgrade-from-current.sh updater/managed-update-agent.sh
+          bash -n bootstrap-update.sh bootstrap-managed-install.sh install-managed-updater.sh upgrade-from-current.sh updater/managed-update-agent.sh
           python - <<'PY'
           from pathlib import Path
           from runtime_hotfix import UPDATER_UI_SCRIPT
