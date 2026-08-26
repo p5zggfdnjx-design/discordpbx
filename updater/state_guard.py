@@ -30,6 +30,16 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _json_list_count(path: Path) -> int:
+    if not path.exists() or path.stat().st_size == 0:
+        return 0
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    return len(raw) if isinstance(raw, list) else 0
+
+
 def _table_counts(path: Path, tables: tuple[str, ...] | None = None) -> dict[str, int]:
     if not path.exists() or path.stat().st_size == 0:
         return {}
@@ -65,6 +75,7 @@ def capture(project_dir: str | Path) -> dict[str, Any]:
     secrets_path = data / "secrets.enc.json"
     app_db = data / "pbx_app.sqlite3"
     history_db = data / "call_history.sqlite3"
+    contacts_path = data / "contacts.json"
 
     secret_keys: list[str] = []
     if secrets_path.exists():
@@ -86,6 +97,8 @@ def capture(project_dir: str | Path) -> dict[str, Any]:
         "app_table_counts": _table_counts(app_db, PERSISTENT_APP_TABLES),
         "history_db_present": history_db.exists(),
         "history_table_counts": _table_counts(history_db, None),
+        "contacts_present": contacts_path.exists(),
+        "contacts_count": _json_list_count(contacts_path),
     }
 
 
@@ -121,6 +134,13 @@ def verify(project_dir: str | Path, baseline: dict[str, Any]) -> list[str]:
                 errors.append(f"{label} table lost: {table}")
             elif int(after[table]) < int(count):
                 errors.append(f"{label} row loss in {table}: {count} -> {after[table]}")
+
+    if baseline.get("contacts_present") and not current.get("contacts_present"):
+        errors.append("contacts.json was lost")
+    before_contacts = int(baseline.get("contacts_count", 0) or 0)
+    after_contacts = int(current.get("contacts_count", 0) or 0)
+    if after_contacts < before_contacts:
+        errors.append(f"contact row loss: {before_contacts} -> {after_contacts}")
 
     return errors
 

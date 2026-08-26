@@ -12,7 +12,8 @@ class RuntimeBootstrapSmokeTests(unittest.TestCase):
             "import bootstrap, webui; "
             "assert getattr(webui.WebControlServer, '_v333_updater_hotfix_applied', False); "
             "assert getattr(webui.WebControlServer, '_matrix_background_applied', False); "
-            "assert getattr(webui.WebControlServer, '_prefix_blocks_applied', False)"
+            "assert getattr(webui.WebControlServer, '_prefix_blocks_applied', False); "
+            "assert getattr(webui.WebControlServer, '_contact_recovery_applied', False)"
         )
         proc = subprocess.run(
             [sys.executable, "-c", code],
