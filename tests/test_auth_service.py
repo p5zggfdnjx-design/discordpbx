@@ -1,11 +1,4 @@
 import unittest
-import sys
-import types
-
-aiohttp = types.ModuleType("aiohttp")
-aiohttp.web = types.ModuleType("aiohttp.web")
-sys.modules.setdefault("aiohttp", aiohttp)
-sys.modules.setdefault("aiohttp.web", aiohttp.web)
 
 from auth_service import AuthService
 
