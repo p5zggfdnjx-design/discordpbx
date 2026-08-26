@@ -2,13 +2,16 @@ from pathlib import Path
 import runpy
 import sys
 
-# runtime_hotfix was originally written against an internal module name that is
-# not present in packaged releases. Alias the real webui module before applying
-# the hotfix so startup cannot fail with ModuleNotFoundError.
+from updater.migrate_state import run as migrate_runtime_state
+
+migrate_runtime_state()
+
 import webui
 sys.modules.setdefault("webui_v3", webui)
 
-from runtime_hotfix import apply
+from runtime_hotfix import apply as apply_updater_hotfix
+from matrix_ui import apply as apply_matrix_ui
 
-apply()
+apply_updater_hotfix()
+apply_matrix_ui()
 runpy.run_path(str(Path(__file__).with_name("bot.py")), run_name="__main__")

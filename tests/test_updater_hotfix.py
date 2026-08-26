@@ -19,7 +19,7 @@ class _AuditDB:
 class _FakeServer:
     def __init__(self, root: Path):
         self._updates_dir = root
-        self.config = SimpleNamespace(version="3.3.2")
+        self.config = SimpleNamespace(version="3.3.5")
         self.db = _AuditDB()
 
     async def _system_admin(self, request):
@@ -37,7 +37,7 @@ class _FakeServer:
 
 
 class UpdaterHotfixTests(unittest.TestCase):
-    def test_ui_injection_is_idempotent_and_owns_all_update_paths(self):
+    def test_ui_injection_is_idempotent_and_one_click(self):
         page = "<html><body><div>PBX</div></body></html>"
         once = inject_updater_ui(page)
         twice = inject_updater_ui(once)
@@ -46,20 +46,24 @@ class UpdaterHotfixTests(unittest.TestCase):
         self.assertIn('/api/system/update/upload', once)
         self.assertIn('/api/system/update/apply', once)
         self.assertIn('/api/system/update/github/install', once)
+        self.assertIn('Check & Install Latest', once)
+        self.assertIn('Install Selected ZIP', once)
+        self.assertIn("'migrating':'Migrating settings/data'", once)
+        self.assertNotIn("confirm(", once)
 
     def test_queue_does_not_require_status_json_when_shared_queue_is_writable(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "pending.zip").write_bytes(b"zip-placeholder")
             (root / "pending_meta.json").write_text(
-                json.dumps({"version": "3.3.3", "sha256": "abc", "source": "github"}),
+                json.dumps({"version": "3.3.6", "sha256": "abc", "source": "github"}),
                 encoding="utf-8",
             )
             server = _FakeServer(root)
             meta = _queue_update(server, {"user_id": "admin", "name": "Admin", "auth_type": "session"})
-            self.assertEqual(meta["version"], "3.3.3")
+            self.assertEqual(meta["version"], "3.3.6")
             marker = json.loads((root / "apply.json").read_text(encoding="utf-8"))
-            self.assertEqual(marker["target_version"], "3.3.3")
+            self.assertEqual(marker["target_version"], "3.3.6")
             self.assertFalse(marker["agent_confirmed"])
             self.assertEqual(server.db.rows[0][0], "system.update.requested")
 
@@ -70,14 +74,14 @@ class UpdaterHotfixTests(unittest.TestCase):
             self.skipTest("aiohttp not installed")
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            (root / "pending_meta.json").write_text(json.dumps({"version": "3.3.3"}), encoding="utf-8")
+            (root / "pending_meta.json").write_text(json.dumps({"version": "3.3.6"}), encoding="utf-8")
             server = _FakeServer(root)
             response = asyncio.run(_system_update_status(server, None))
             payload = json.loads(response.text)
             self.assertTrue(payload["queue_writable"])
             self.assertTrue(payload["managed_agent_ready"])
             self.assertFalse(payload["agent_confirmed"])
-            self.assertEqual(payload["pending"]["version"], "3.3.3")
+            self.assertEqual(payload["pending"]["version"], "3.3.6")
 
 
 if __name__ == "__main__":
