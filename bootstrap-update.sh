@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 REPO="${DISCORDPBX_REPO:-p5zggfdnjx-design/discordpbx}"
 CONTAINER_NAME="${DISCORDPBX_CONTAINER:-discord-pbx}"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run with sudo/root so the host updater can be repaired and started." >&2
@@ -11,17 +12,51 @@ fi
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
+command -v systemctl >/dev/null || { echo "systemd/systemctl is required" >&2; exit 1; }
 
 PROJECT_DIR="$(docker inspect "$CONTAINER_NAME" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)"
+if [[ -z "$PROJECT_DIR" || ! -d "$PROJECT_DIR" ]]; then
+  if [[ -L /opt/discord-pbx/current && -d /opt/discord-pbx/current ]]; then
+    PROJECT_DIR="$(readlink -f /opt/discord-pbx/current)"
+  fi
+fi
 [[ -n "$PROJECT_DIR" && -d "$PROJECT_DIR" ]] || { echo "Could not determine the running DiscordPBX compose directory." >&2; exit 1; }
 [[ -f "$PROJECT_DIR/docker-compose.yml" ]] || { echo "docker-compose.yml not found in $PROJECT_DIR" >&2; exit 1; }
 
-if [[ -x "$PROJECT_DIR/install-managed-updater.sh" ]]; then
-  "$PROJECT_DIR/install-managed-updater.sh"
-else
-  echo "Managed updater installer is missing from $PROJECT_DIR" >&2
-  exit 1
+echo "DiscordPBX project: $PROJECT_DIR"
+
+# Older/migrated releases may not contain the managed-updater installer even
+# though they are otherwise healthy. Bootstrap repairs that condition directly
+# from the repository before attempting to stage the newest release.
+INSTALLER="$PROJECT_DIR/install-managed-updater.sh"
+AGENT="$PROJECT_DIR/updater/managed-update-agent.sh"
+NEED_REPAIR=0
+[[ -f "$INSTALLER" ]] || NEED_REPAIR=1
+[[ -f "$AGENT" ]] || NEED_REPAIR=1
+if [[ "$NEED_REPAIR" -eq 0 ]]; then
+  bash -n "$INSTALLER" >/dev/null 2>&1 || NEED_REPAIR=1
+  bash -n "$AGENT" >/dev/null 2>&1 || NEED_REPAIR=1
 fi
+
+if [[ "$NEED_REPAIR" -eq 1 ]]; then
+  echo "Installing/repairing managed updater files from GitHub ..."
+  mkdir -p "$PROJECT_DIR/updater"
+  WORK="$(mktemp -d /tmp/discordpbx-bootstrap.XXXXXX)"
+  trap 'rm -rf "$WORK"' EXIT
+  INSTALLER_TMP="$WORK/install-managed-updater.sh"
+  AGENT_TMP="$WORK/managed-update-agent.sh"
+  curl -fsSL --retry 3 --retry-delay 2 "$RAW_BASE/install-managed-updater.sh" -o "$INSTALLER_TMP"
+  curl -fsSL --retry 3 --retry-delay 2 "$RAW_BASE/updater/managed-update-agent.sh" -o "$AGENT_TMP"
+  bash -n "$INSTALLER_TMP"
+  bash -n "$AGENT_TMP"
+  install -m 0755 "$INSTALLER_TMP" "$INSTALLER"
+  install -m 0755 "$AGENT_TMP" "$AGENT"
+  rm -rf "$WORK"
+  trap - EXIT
+fi
+
+chmod +x "$INSTALLER" "$AGENT"
+"$INSTALLER"
 
 UPDATES_DIR="$PROJECT_DIR/data/updates"
 mkdir -p "$UPDATES_DIR"
@@ -32,7 +67,7 @@ APPLY="$UPDATES_DIR/apply.json"
 rm -f "$TMP"
 
 echo "Checking latest DiscordPBX release from $REPO ..."
-RELEASE_JSON="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest")"
+RELEASE_JSON="$(curl -fsSL --retry 3 --retry-delay 2 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest")"
 readarray -t RELEASE_INFO < <(python3 -c '
 import json,sys
 p=json.load(sys.stdin)
@@ -69,7 +104,7 @@ with zipfile.ZipFile(path) as z:
     selected=None
     for prefix in sorted(prefixes,key=len):
         base='/'.join(prefix)
-        have={('/'.join(p)) for p in candidates}
+        have={'/'.join(p) for p in candidates}
         if all(((base+'/'+r) if base else r) in have for r in required):
             selected=(base+'/' if base else '')
             break
@@ -113,7 +148,9 @@ PROJECT_UID="$(stat -c %u "$PROJECT_DIR")"
 PROJECT_GID="$(stat -c %g "$PROJECT_DIR")"
 chown "$PROJECT_UID:$PROJECT_GID" "$FINAL" "$META" "$APPLY" 2>/dev/null || true
 chmod 0660 "$FINAL" "$META" "$APPLY" 2>/dev/null || true
-systemctl start discord-pbx-update.path >/dev/null 2>&1 || true
+
+systemctl daemon-reload
+systemctl enable --now discord-pbx-update.path >/dev/null
 systemctl start discord-pbx-update.service
 
 echo "Queued DiscordPBX v$VERSION. The updater is now building/health-checking it."
