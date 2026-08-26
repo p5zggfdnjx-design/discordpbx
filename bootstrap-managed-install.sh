@@ -43,6 +43,7 @@ WORK="$(mktemp -d /tmp/discordpbx-managed-install.XXXXXX)"
 RELEASE_JSON="$WORK/release.json"
 PACKAGE="$WORK/release.zip"
 EXTRACT="$WORK/extract"
+STATE_BASELINE="$WORK/source-state.json"
 mkdir -p "$EXTRACT"
 
 log "Downloading latest verified GitHub release"
@@ -103,7 +104,7 @@ mapfile -t TOPFILES < <(find "$EXTRACT" -mindepth 1 -maxdepth 1 -type f -printf 
 if [[ ${#TOPDIRS[@]} -eq 1 && ${#TOPFILES[@]} -eq 0 ]]; then
   SOURCE="${TOPDIRS[0]}"
 fi
-for req in bot.py config.py docker-compose.yml install-managed-updater.sh updater/managed-update-agent.sh; do
+for req in bot.py config.py docker-compose.yml install-managed-updater.sh updater/managed-update-agent.sh updater/state_guard.py; do
   [[ -f "$SOURCE/$req" ]] || die "Release package is missing $req"
 done
 
@@ -123,6 +124,12 @@ OLD_CONTACTS=0
 if [[ -n "$OLD_DIR" && -f "$OLD_DIR/data/contacts.json" ]]; then
   OLD_CONTACTS="$(contact_count "$OLD_DIR/data/contacts.json")"
   [[ "$OLD_CONTACTS" -ge 0 ]] || die "Existing contacts.json is invalid; refusing migration."
+fi
+
+if [[ -n "$OLD_DIR" ]]; then
+  if ! python3 "$SOURCE/updater/state_guard.py" capture "$OLD_DIR" "$STATE_BASELINE"; then
+    die "Could not capture the current deployment's persistent-state baseline."
+  fi
 fi
 
 log "Building stable managed installation"
@@ -156,8 +163,15 @@ if [[ -f "$INSTALL_DIR/data/contacts.json" ]]; then
   [[ "$NEW_CONTACTS" -ge "$OLD_CONTACTS" ]] || die "Managed migration would reduce contacts from $OLD_CONTACTS to $NEW_CONTACTS; refusing cutover."
 fi
 
+if [[ -f "$STATE_BASELINE" ]]; then
+  if ! python3 "$INSTALL_DIR/updater/state_guard.py" verify "$INSTALL_DIR" "$STATE_BASELINE"; then
+    die "Managed migration would lose or replace persistent PBX state; refusing cutover."
+  fi
+fi
+
 echo "Contacts before: $OLD_CONTACTS"
 echo "Contacts after:  $NEW_CONTACTS"
+[[ ! -f "$STATE_BASELINE" ]] || echo "Persistent state continuity: verified"
 
 # Resolve real upstream DNS servers. Docker cannot use the host's 127.0.0.53
 # systemd-resolved stub from inside a container.
