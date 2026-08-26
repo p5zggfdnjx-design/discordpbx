@@ -1,0 +1,19 @@
+; Discord <-> FreePBX bridge test extension and inbound destination.
+; Replace BUILDER_IP, PBX_INGRESS_TOKEN, and AudioSocket port if needed.
+;
+; FreePBX Custom Destination target for inbound routes:
+;   discord-bridge,s,1
+
+[from-internal-custom]
+exten => 9900,1,Goto(discord-bridge,s,1)
+
+[discord-bridge]
+exten => s,1,NoOp(Discord AudioSocket Bridge - caller ${CALLERID(all)})
+ same => n,Answer()
+ same => n,Set(BRIDGE_UUID=${UUID()})
+ same => n,Set(DISCORD_CALL_UUID=${BRIDGE_UUID})
+ ; Optional but recommended. Registers caller number with the web UI before
+ ; AudioSocket connects. Requires func_curl and PBX_INGRESS_TOKEN in .env.
+ same => n,Set(PBX_META=${CURL(http://BUILDER_IP:8088/api/pbx/inbound/register?token=PBX_INGRESS_TOKEN&uuid=${BRIDGE_UUID}&number=${CALLERID(num)})})
+ same => n,AudioSocket(${BRIDGE_UUID},BUILDER_IP:9092)
+ same => n,Hangup()

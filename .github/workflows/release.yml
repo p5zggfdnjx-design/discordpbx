@@ -1,0 +1,75 @@
+name: Publish DiscordPBX release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (leave blank to use config.py)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            INPUT_VERSION='${{ inputs.version }}'
+            echo "version=${INPUT_VERSION#v}" >> "$GITHUB_OUTPUT"
+          else
+            VERSION="$(python3 - <<'PY'
+          import re
+          s=open('config.py',encoding='utf-8').read()
+          m=re.search(r'version\s*=\s*["\x27]([^"\x27]+)',s)
+          print(m.group(1) if m else 'dev')
+          PY
+          )"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build release ZIP
+        shell: bash
+        run: |
+          VERSION='${{ steps.version.outputs.version }}'
+          ROOT="discord-freepbx-bridge-v${VERSION}"
+          mkdir -p "/tmp/${ROOT}"
+          rsync -a --delete \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.env' \
+            --exclude 'data/' \
+            ./ "/tmp/${ROOT}/"
+          cd /tmp
+          zip -qr "${GITHUB_WORKSPACE}/discord-freepbx-bridge-v${VERSION}.zip" "${ROOT}"
+          sha256sum "${GITHUB_WORKSPACE}/discord-freepbx-bridge-v${VERSION}.zip" > "${GITHUB_WORKSPACE}/discord-freepbx-bridge-v${VERSION}.zip.sha256"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION='${{ steps.version.outputs.version }}'
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              "discord-freepbx-bridge-v${VERSION}.zip" \
+              "discord-freepbx-bridge-v${VERSION}.zip.sha256" \
+              --clobber
+          else
+            gh release create "$TAG" \
+              "discord-freepbx-bridge-v${VERSION}.zip" \
+              "discord-freepbx-bridge-v${VERSION}.zip.sha256" \
+              --target "$GITHUB_SHA" \
+              --generate-notes \
+              --title "DiscordPBX v${VERSION}"
+          fi
