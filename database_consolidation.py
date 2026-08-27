@@ -29,7 +29,8 @@ def _sha256(path: Path) -> str:
 
 
 def ensure_schema(db) -> None:
-    with db.transaction() as con:
+    """Install consolidation tables without nesting executescript in a transaction."""
+    with db._lock, db._connect() as con:
         con.executescript(
             """
             CREATE TABLE IF NOT EXISTS component_schema (
@@ -65,6 +66,8 @@ def ensure_schema(db) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_identity_directory_seen
                 ON identity_directory(last_seen DESC);
+            CREATE INDEX IF NOT EXISTS idx_identity_directory_auth
+                ON identity_directory(auth_type, last_seen DESC);
             """
         )
         con.execute(
@@ -97,7 +100,8 @@ def _mark_migration(db, source: str, row_count: int, source_sha256: str) -> None
 
 
 def backup_and_catalog_legacy_data(db, data_dir: Path) -> None:
-    """Create non-destructive rollback copies and fingerprint legacy flat stores."""
+    """Create immutable first-migration rollback copies and fingerprint old stores."""
+    ensure_schema(db)
     backup_dir = data_dir / "migration-backups" / "database-consolidation-v1"
     backup_dir.mkdir(parents=True, exist_ok=True)
     names = (
@@ -112,45 +116,52 @@ def backup_and_catalog_legacy_data(db, data_dir: Path) -> None:
         "call_history.sqlite3",
     )
     now = time.time()
-    with db.transaction() as con:
-        for name in names:
-            src = data_dir / name
-            if not src.is_file():
-                continue
-            dst = backup_dir / name
-            if not dst.exists():
-                if name == "call_history.sqlite3":
-                    src_con = sqlite3.connect(src)
-                    dst_con = sqlite3.connect(dst)
-                    try:
-                        src_con.backup(dst_con)
-                    finally:
-                        dst_con.close()
-                        src_con.close()
-                else:
-                    shutil.copy2(src, dst)
-            con.execute(
+    catalog: list[tuple[str, str, int, str, float]] = []
+    for name in names:
+        src = data_dir / name
+        if not src.is_file():
+            continue
+        dst = backup_dir / name
+        if not dst.exists():
+            if name == "call_history.sqlite3":
+                src_con = sqlite3.connect(src, timeout=30)
+                dst_con = sqlite3.connect(dst, timeout=30)
+                try:
+                    src_con.backup(dst_con)
+                finally:
+                    dst_con.close()
+                    src_con.close()
+            else:
+                shutil.copy2(src, dst)
+        catalog.append((name, str(src), int(src.stat().st_size), _sha256(src), now))
+
+    if catalog:
+        with db.transaction() as con:
+            con.executemany(
                 """INSERT INTO legacy_data_catalog(source,path,size_bytes,sha256,captured_at)
                    VALUES(?,?,?,?,?)
                    ON CONFLICT(source) DO UPDATE SET
                      path=excluded.path,size_bytes=excluded.size_bytes,
                      sha256=excluded.sha256,captured_at=excluded.captured_at""",
-                (name, str(src), int(src.stat().st_size), _sha256(src), now),
+                catalog,
             )
 
 
 def _table_columns(con: sqlite3.Connection, schema: str, table: str) -> list[str]:
+    safe_schema = schema.replace('"', '""')
+    safe_table = table.replace('"', '""')
     return [str(r[1]) for r in con.execute(
-        f'PRAGMA {schema}.table_info("{table}")'
+        f'PRAGMA "{safe_schema}".table_info("{safe_table}")'
     ).fetchall()]
 
 
 def migrate_call_history(db, source_path: Path) -> int:
-    """Move the old call-history SQLite tables into pbx_app.sqlite3 atomically."""
+    """Copy legacy call-history tables into pbx_app.sqlite3 exactly once."""
     ensure_schema(db)
     source_key = "sqlite:call_history.sqlite3"
     if _migration_done(db, source_key):
         return 0
+    source_path = Path(source_path)
     if not source_path.is_file() or source_path.resolve() == Path(db.path).resolve():
         _mark_migration(db, source_key, 0, "")
         return 0
@@ -159,6 +170,7 @@ def migrate_call_history(db, source_path: Path) -> int:
 
     con = sqlite3.connect(db.path, timeout=30, isolation_level=None)
     try:
+        con.row_factory = sqlite3.Row
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA foreign_keys=ON")
         con.execute("PRAGMA busy_timeout=10000")
@@ -173,9 +185,9 @@ def migrate_call_history(db, source_path: Path) -> int:
             ).fetchone()
             if not exists:
                 continue
-            src = set(_table_columns(con, "legacy_history", table))
-            dst = _table_columns(con, "main", table)
-            columns = [c for c in dst if c in src and c != "id"]
+            src_columns = set(_table_columns(con, "legacy_history", table))
+            dst_columns = _table_columns(con, "main", table)
+            columns = [c for c in dst_columns if c in src_columns and c != "id"]
             if not columns:
                 continue
             quoted = ",".join('"' + c.replace('"', '""') + '"' for c in columns)
@@ -217,7 +229,7 @@ def migrate_call_history(db, source_path: Path) -> int:
 
 
 def sync_identity_directory(db) -> None:
-    """Unify Discord, local-user, and break-glass identities in one directory."""
+    """Merge Discord, local-user and break-glass identities into one directory."""
     ensure_schema(db)
     now = time.time()
     with db.transaction() as con:
@@ -255,6 +267,7 @@ def sync_identity_directory(db) -> None:
                      username=excluded.username,
                      display_name=excluded.display_name,
                      is_system_admin=excluded.is_system_admin,
+                     last_seen=MAX(identity_directory.last_seen,excluded.last_seen),
                      last_login=MAX(identity_directory.last_login,excluded.last_login)""",
                 (
                     key, "local_user", source_id, str(row["username"]),
@@ -342,9 +355,10 @@ def known_user_count(db) -> int:
 def database_counts(db) -> dict[str, int]:
     wanted = (
         "users", "local_users", "identity_directory", "web_sessions",
-        "workspaces", "workspace_roles", "calls", "activity", "call_events", "audit_log",
+        "workspaces", "workspace_roles", "calls", "activity", "call_events",
+        "audit_log", "storage_migrations", "legacy_data_catalog",
     )
-    out = {}
+    out: dict[str, int] = {}
     with db._lock, db._connect() as con:
         existing = {
             str(r[0]) for r in con.execute(
@@ -374,7 +388,7 @@ def _inject_online_users_ui(text: str) -> str:
 (()=>{'use strict';
 const $=s=>document.querySelector(s);
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function mount(){const host=$('#workspaces');if(!host||$('#onlineUsersPanel'))return;const card=document.createElement('section');card.className='card';card.id='onlineUsersPanel';card.innerHTML='<div class="row"><div><h2 style="margin:0">Online users</h2><div class="muted">Active PBX panel sessions</div></div><span class="tag" id="knownUserCount" style="margin-left:auto">— users</span></div><div class="onlineUserGrid" id="onlineUserGrid"><div class="muted">Loading…</div></div><div class="muted small" id="databaseState" style="margin-top:8px"></div>';host.prepend(card)}
+function mount(){const host=$('#workspaces');if(!host||$('#onlineUsersPanel'))return;const card=document.createElement('section');card.className='card';card.id='onlineUsersPanel';card.innerHTML='<div class="row"><div><h2 style="margin:0">Online users</h2><div class="muted">Active authenticated PBX panel sessions</div></div><span class="tag" id="knownUserCount" style="margin-left:auto">— users</span></div><div class="onlineUserGrid" id="onlineUserGrid"><div class="muted">Loading…</div></div><div class="muted small" id="databaseState" style="margin-top:8px"></div>';host.prepend(card)}
 async function refresh(){mount();const grid=$('#onlineUserGrid');if(!grid)return;try{const r=await fetch('/api/status',{cache:'no-store',credentials:'same-origin'});if(!r.ok)return;const j=await r.json();const users=Array.isArray(j.online_users)?j.online_users:[];const count=$('#knownUserCount');if(count)count.textContent=`${j.known_user_count??users.length} known · ${users.length} online`;grid.innerHTML=users.length?users.map(u=>`<div class="onlineUser">${u.avatar_url?`<img src="${esc(u.avatar_url)}" alt="">`:`<div class="onlineAvatar">${esc((u.name||'?').slice(0,1).toUpperCase())}</div>`}<div style="min-width:0;flex:1"><b>${esc(u.name||u.username||u.user_id)}</b><div class="muted small">${esc(u.auth_type)}${u.system_admin?' · admin':''}</div></div><span class="onlineDot" title="Online"></span></div>`).join(''):'<div class="muted">Nobody else is currently active.</div>';const state=$('#databaseState');if(state&&j.database_storage?.consolidated)state.textContent=`Storage: ${j.database_storage.engine} · ${j.database_storage.file}`;}catch(e){}}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{mount();refresh()},{once:true});else{mount();refresh()}
 setInterval(refresh,20000);
@@ -392,7 +406,6 @@ def _patch_appdb_sessions() -> None:
     def create_session(self, user_id: str, auth_type: str, **kwargs):
         result = original(self, user_id, auth_type, **kwargs)
         try:
-            ensure_schema(self)
             record_login(self, str(user_id), str(auth_type))
         except Exception:
             log.exception("Could not record user login in identity directory")
