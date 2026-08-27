@@ -14,10 +14,12 @@ from matrix_ui import apply as apply_matrix_ui
 from prefix_blocks import apply as apply_prefix_blocks
 from contact_recovery import apply as apply_contact_recovery
 from reliability_guard import apply as apply_reliability_guard
+from global_contacts import apply as apply_global_contacts
 
 apply_updater_hotfix()
 apply_matrix_ui()
 apply_prefix_blocks()
 apply_contact_recovery()
 apply_reliability_guard()
+apply_global_contacts()
 runpy.run_path(str(Path(__file__).with_name("bot.py")), run_name="__main__")
