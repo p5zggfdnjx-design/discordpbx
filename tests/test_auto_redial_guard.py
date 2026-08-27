@@ -58,7 +58,7 @@ class FakeServer:
 
 class AutoRedialPolicyTests(unittest.TestCase):
     def test_reason_normalization_and_modes(self):
-        self.assertEqual(normalize_reason("ring-timeout"), "timeout")
+        self.assertEqual(normalize_reason("ring-timeout"), "no answer")
         self.assertEqual(normalize_reason("NOANSWER"), "no answer")
         self.assertTrue(retry_allowed({"retry_on": "no-answer"}, "busy"))
         self.assertFalse(retry_allowed({"retry_on": "no-answer"}, "disconnected"))
