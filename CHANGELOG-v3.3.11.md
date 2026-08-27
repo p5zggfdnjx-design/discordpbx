@@ -1,6 +1,6 @@
 # DiscordPBX v3.3.11
 
-Contact-sharing, user-presence, and storage-reliability release.
+Contact-sharing, user-presence, storage-reliability, and redial-reliability release.
 
 ## Contacts
 
@@ -15,6 +15,16 @@ Contact-sharing, user-presence, and storage-reliability release.
 - Track first/last-seen and login metadata without storing raw client IPs or user-agent strings.
 - Add an Online users card to the Workspaces page using active authenticated PBX sessions.
 - Expose known-user and online-user counts through the existing authenticated status surface.
+
+## Auto redial
+
+- Restore redial scheduling for ring/no-answer timeouts that v3 previously drained without forwarding to the redial scheduler.
+- If auto redial is enabled after a call has already failed, schedule the retry immediately instead of waiting for an event that already happened.
+- Preserve workspace routing and operator attribution across retry attempts.
+- Keep the retry chain attached to a stable root call so disabling auto redial from the original call also cancels any current child retry.
+- Retry transient queue/voice/AMI failures while consuming the configured retry budget instead of silently killing the redial worker.
+- Stop immediately on policy failures such as DNC or outbound-disabled errors instead of repeatedly attempting a prohibited call.
+- Publish retry metadata and retain retry-of / retry-index history linkage for diagnostics.
 
 ## Database consolidation and migration safety
 
