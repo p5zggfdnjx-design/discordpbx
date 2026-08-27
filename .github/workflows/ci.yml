@@ -27,9 +27,17 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           from runtime_hotfix import UPDATER_UI_SCRIPT
-          js = UPDATER_UI_SCRIPT.replace('<script id="pbx-updater-hotfix-v333">', '', 1).rsplit('</script>', 1)[0]
-          Path('/tmp/discordpbx-updater-ui.js').write_text(js, encoding='utf-8')
+          from database_consolidation import _inject_online_users_ui
+
+          updater_js = UPDATER_UI_SCRIPT.replace('<script id="pbx-updater-hotfix-v333">', '', 1).rsplit('</script>', 1)[0]
+          Path('/tmp/discordpbx-updater-ui.js').write_text(updater_js, encoding='utf-8')
+
+          html = _inject_online_users_ui('<html><body><section id="workspaces"></section></body></html>')
+          marker = '<script id="pbx-online-users-script">'
+          users_js = html.split(marker, 1)[1].split('</script>', 1)[0]
+          Path('/tmp/discordpbx-online-users.js').write_text(users_js, encoding='utf-8')
           PY
           node --check /tmp/discordpbx-updater-ui.js
+          node --check /tmp/discordpbx-online-users.js
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
