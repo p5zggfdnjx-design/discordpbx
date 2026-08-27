@@ -96,3 +96,16 @@ jobs:
               --generate-notes \
               --title "DiscordPBX v${VERSION}"
           fi
+      - name: Clean old releases from Releases page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          CURRENT="v${{ steps.version.outputs.version }}"
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | while IFS= read -r OLD_TAG; do
+            [[ -n "$OLD_TAG" ]] || continue
+            [[ "$OLD_TAG" == "$CURRENT" ]] && continue
+            echo "Removing old release entry: $OLD_TAG"
+            gh release delete "$OLD_TAG" --yes
+          done
+          echo "Release page cleaned; retained $CURRENT"
