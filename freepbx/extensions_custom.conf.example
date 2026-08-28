@@ -12,8 +12,12 @@ exten => s,1,NoOp(Discord AudioSocket Bridge - caller ${CALLERID(all)})
  same => n,Answer()
  same => n,Set(BRIDGE_UUID=${UUID()})
  same => n,Set(DISCORD_CALL_UUID=${BRIDGE_UUID})
- ; Optional but recommended. Registers caller number with the web UI before
- ; AudioSocket connects. Requires func_curl and PBX_INGRESS_TOKEN in .env.
+ ; Metadata registration is optional. Bound the LAN HTTP request so a stopped,
+ ; restarting, or overloaded web service can never hold the caller before
+ ; AudioSocket starts. If it fails, the bridge still accepts the call and uses
+ ; its default inbound workspace routing.
+ same => n,Set(CURLOPT(conntimeout)=1)
+ same => n,Set(CURLOPT(timeout)=2)
  same => n,Set(PBX_META=${CURL(http://BUILDER_IP:8088/api/pbx/inbound/register?token=PBX_INGRESS_TOKEN&uuid=${BRIDGE_UUID}&number=${CALLERID(num)})})
  same => n,AudioSocket(${BRIDGE_UUID},BUILDER_IP:9092)
  same => n,Hangup()
