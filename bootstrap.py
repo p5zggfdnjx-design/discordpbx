@@ -10,6 +10,7 @@ import webui
 sys.modules.setdefault("webui_v3", webui)
 
 from runtime_hotfix import apply as apply_updater_hotfix
+from github_release_guard import apply as apply_github_release_guard
 from matrix_ui import apply as apply_matrix_ui
 from prefix_blocks import apply as apply_prefix_blocks
 from contact_recovery import apply as apply_contact_recovery
@@ -25,6 +26,7 @@ from inbound_expiry_guard import apply as apply_inbound_expiry_guard
 from inbound_routing_guard import apply as apply_inbound_routing_guard
 
 apply_updater_hotfix()
+apply_github_release_guard()
 apply_matrix_ui()
 apply_prefix_blocks()
 apply_contact_recovery()
