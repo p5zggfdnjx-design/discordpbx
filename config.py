@@ -98,7 +98,7 @@ class Config:
         if web_auth_mode not in {"discord", "basic", "none", "hybrid"}:
             web_auth_mode = "discord"
         return cls(
-            version="3.3.12",
+            version="3.3.13",
             data_dir=data_dir,
             discord_token=os.getenv("DISCORD_TOKEN", "").strip(),
             discord_client_id=os.getenv("DISCORD_CLIENT_ID", "").strip(),
