@@ -2,9 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# The managed updater invokes this file as a standalone script
+# (`docker compose run --entrypoint python discord-pbx /app/updater/migrate_state.py`).
+# For that invocation form, Python only puts this file's own directory
+# (/app/updater) on sys.path, not the application root where appdb.py and
+# secrets_store.py live, so the imports below fail with ModuleNotFoundError.
+# Add the app root explicitly so this script works both as a standalone
+# script and as an imported module (e.g. from the test suite).
+_APP_ROOT = str(Path(__file__).resolve().parent.parent)
+if _APP_ROOT not in sys.path:
+    sys.path.insert(0, _APP_ROOT)
 
 from appdb import AppDatabase
 from secrets_store import SecretStore

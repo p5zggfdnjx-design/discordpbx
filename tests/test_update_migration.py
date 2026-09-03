@@ -1,6 +1,8 @@
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,8 @@ from appdb import AppDatabase
 from secrets_store import SecretStore
 from updater.migrate_state import run
 from updater.state_guard import capture, verify
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class UpdateMigrationTests(unittest.TestCase):
@@ -49,6 +53,47 @@ class UpdateMigrationTests(unittest.TestCase):
                 store = SecretStore(td)
                 self.assertEqual(db.get_setting("public_base_url"), "https://pbx.example.test")
                 self.assertEqual(store.get("discord_oauth_client_secret"), "oauth-secret-one")
+
+    def test_runs_as_standalone_script_like_the_managed_updater(self):
+        """Reproduces the managed updater's real invocation.
+
+        managed-update-agent.sh runs this file as
+        `docker compose run --entrypoint python discord-pbx /app/updater/migrate_state.py`,
+        i.e. `python /app/updater/migrate_state.py`. Unlike importing
+        `updater.migrate_state` (as the test above does, and as pytest's
+        rootdir-on-sys.path behavior allows), invoking the file directly only
+        puts its own directory (updater/) on sys.path, not the application
+        root containing appdb.py/secrets_store.py. This must not raise
+        ModuleNotFoundError.
+        """
+        script = REPO_ROOT / "updater" / "migrate_state.py"
+        with tempfile.TemporaryDirectory() as td:
+            env = dict(os.environ)
+            env.update({
+                "DATA_DIR": td,
+                "PUBLIC_BASE_URL": "https://standalone.example.test",
+                "BOT_OWNER_IDS": "999",
+                "PBX_TARGET_VERSION": "3.3.17",
+            })
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=str(REPO_ROOT),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(
+                result.returncode, 0,
+                msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
+            )
+            self.assertNotIn("ModuleNotFoundError", result.stderr)
+            payload = json.loads(result.stdout.strip().splitlines()[-1])
+            self.assertTrue(payload["ok"])
+            self.assertIn("public_base_url", payload["imported_settings"])
+
+            db = AppDatabase(str(Path(td) / "pbx_app.sqlite3"))
+            self.assertEqual(db.get_setting("public_base_url"), "https://standalone.example.test")
 
     def test_state_guard_allows_additions_but_detects_loss(self):
         with tempfile.TemporaryDirectory() as td:
