@@ -9,15 +9,16 @@ exten => 9900,1,Goto(discord-bridge,s,1)
 
 [discord-bridge]
 exten => s,1,NoOp(Discord AudioSocket Bridge - caller ${CALLERID(all)})
- same => n,Answer()
  same => n,Set(BRIDGE_UUID=${UUID()})
  same => n,Set(DISCORD_CALL_UUID=${BRIDGE_UUID})
- ; Metadata registration is optional. Bound the LAN HTTP request so a stopped,
- ; restarting, or overloaded web service can never hold the caller before
- ; AudioSocket starts. If it fails, the bridge still accepts the call and uses
- ; its default inbound workspace routing.
+ ; Register metadata before Answer(). DiscordPBX uses this short callback window
+ ; to start/prewarm the selected Discord voice destination while the carrier side
+ ; can continue presenting normal ringing instead of answering into dead air.
+ ; The request remains bounded: if the web service is stopped/restarting, the
+ ; dialplan still proceeds to Answer()/AudioSocket rather than hanging forever.
  same => n,Set(CURLOPT(conntimeout)=1)
  same => n,Set(CURLOPT(timeout)=2)
  same => n,Set(PBX_META=${CURL(http://BUILDER_IP:8088/api/pbx/inbound/register?token=PBX_INGRESS_TOKEN&uuid=${BRIDGE_UUID}&number=${CALLERID(num)})})
+ same => n,Answer()
  same => n,AudioSocket(${BRIDGE_UUID},BUILDER_IP:9092)
  same => n,Hangup()
