@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
+import uuid as uuidlib
 from collections import deque
+
+from aiohttp import web
 
 from bridge import BridgeManager
 import inbound_voice_guard as voice_guard
@@ -37,7 +39,9 @@ def _env_float(name: str, default: float, lo: float, hi: float) -> float:
 
 
 ENABLED = _env_bool("PBX_INBOUND_STABILITY_GUARD", True)
-HANDSHAKE_WAIT_SECONDS = _env_float("PBX_INBOUND_HANDSHAKE_WAIT", 4.0, 0.0, 10.0)
+# The bundled FreePBX example has a 2-second CURL timeout. Keep the default wait
+# comfortably below it so metadata registration still returns to the dialplan.
+HANDSHAKE_WAIT_SECONDS = _env_float("PBX_INBOUND_HANDSHAKE_WAIT", 1.25, 0.0, 10.0)
 HANDSHAKE_POLL_SECONDS = _env_float("PBX_INBOUND_HANDSHAKE_POLL", 0.05, 0.01, 0.5)
 HANGUP_SOUND_WINDOW_SECONDS = _env_float("PBX_HANGUP_SOUND_WINDOW", 60.0, 5.0, 300.0)
 HANGUP_SOUND_BURST_LIMIT = _env_int("PBX_HANGUP_SOUND_BURST_LIMIT", 3, 0, 50)
@@ -86,11 +90,13 @@ async def _wait_for_selected_voice(server, workspace_ids: list[str]) -> bool:
 def apply() -> None:
     """Synchronize inbound prewarm with FreePBX and quiet rapid hangup cues.
 
-    The existing inbound registration starts Discord voice prewarm asynchronously.
-    FreePBX's CURL callback previously returned immediately, allowing AudioSocket to
-    arrive while that cold Discord connection was still starting. This guard gives
-    prewarm a bounded head start, but never rejects the call when the wait expires;
-    the existing AudioSocket retry path remains authoritative.
+    Inbound registration used to resolve routing twice: once to select the target
+    and again to build the status/audit label. The second pass can perform fresh
+    Discord presence work and consumes a meaningful part of FreePBX's short CURL
+    callback budget. This guard performs one routing decision, immediately starts
+    the existing prewarm, then gives that prewarm a bounded head start before the
+    callback returns. A timeout never rejects the call; AudioSocket keeps its normal
+    retry/self-heal path.
     """
     if getattr(BridgeManager, "_inbound_stability_guard", False):
         return
@@ -141,37 +147,85 @@ def apply() -> None:
     import webui_v3
 
     cls = webui_v3.WebControlServer
-    old_inbound_register = cls.inbound_register
 
     async def inbound_register(self, request):
-        response = await old_inbound_register(self, request)
-        if not ENABLED or getattr(response, "status", 200) >= 400 or HANDSHAKE_WAIT_SECONDS <= 0:
-            return response
-
+        """Fast single-pass inbound registration with bounded Discord prewarm wait."""
         try:
-            payload = json.loads(response.text or "{}")
-            ids = [str(x) for x in payload.get("workspace_ids", []) if str(x)]
-        except Exception:
-            ids = []
-        if not ids:
-            return response
+            call_uuid = str(request.query.get("uuid", "")).strip()
+            uuidlib.UUID(call_uuid)
+            raw = str(request.query.get("number", "")).strip()
+            number = self.bot.ami.normalize_number(raw) if raw else ""
 
-        started = time.monotonic()
-        ready = await _wait_for_selected_voice(self, ids)
-        elapsed_ms = round((time.monotonic() - started) * 1000.0, 1)
-        metrics = self.bot.bridge._inbound_stability_metrics
-        if ready:
-            metrics["handshake_ready"] += 1
-            log.info("Inbound Discord prewarm ready before PBX callback returned (%sms)", elapsed_ms)
-        else:
-            # Do not fail the inbound call. AudioSocket call_started still has its
-            # normal multi-attempt voice recovery after the callback returns.
-            metrics["handshake_timeout"] += 1
-            log.warning(
-                "Inbound Discord prewarm not ready after %.1fs; allowing AudioSocket retry path",
-                HANDSHAKE_WAIT_SECONDS,
+            selected = await self.workspaces.resolve_inbound_workspaces()
+            wsids = [str(x["id"]) for x in selected]
+            default = wsids[0] if wsids else ""
+            contact = self.contacts.find_by_number(number, default) if number else None
+            name = (contact or {}).get("name", "")
+
+            # prepare_inbound is already wrapped by inbound_first_call_guard, so
+            # this line starts voice prewarm without blocking the HTTP callback.
+            self.bot.bridge.prepare_inbound(call_uuid, number, name, workspace_ids=wsids)
+
+            cfg = self.db.get_setting("inbound_routing", {}) or {}
+            mode = str(cfg.get("mode", "auto") or "auto")
+            try:
+                expires = float(cfg.get("override_expires", 0) or 0)
+            except (TypeError, ValueError):
+                expires = 0.0
+            if expires and expires <= time.time():
+                mode = "auto"
+
+            self.call_history.start_call(
+                uuid=call_uuid,
+                direction="inbound",
+                number=number,
+                contact_name=name,
+                source="inbound",
+                state="incoming",
+                workspace_ids=wsids,
+                route_reason=f"{mode} -> {','.join(wsids) or 'none'}",
             )
-        return response
+            self.db.audit(
+                "call.inbound.registered",
+                actor_user_id="pbx:ingress",
+                actor_name="FreePBX",
+                auth_type="ingress",
+                workspace_id=default,
+                entity_type="call",
+                entity_id=call_uuid,
+                call_uuid=call_uuid,
+                number=number,
+                detail={"workspaces": wsids, "routing_mode": mode},
+            )
+            await self._publish(
+                "call.incoming",
+                {"uuid": call_uuid, "number": number, "contact_name": name, "workspace_ids": wsids},
+            )
+
+            if ENABLED and wsids and HANDSHAKE_WAIT_SECONDS > 0:
+                started = time.monotonic()
+                ready = await _wait_for_selected_voice(self, wsids)
+                elapsed_ms = round((time.monotonic() - started) * 1000.0, 1)
+                metrics = self.bot.bridge._inbound_stability_metrics
+                if ready:
+                    metrics["handshake_ready"] += 1
+                    log.info("Inbound Discord prewarm ready before PBX callback returned (%sms)", elapsed_ms)
+                else:
+                    # Do not fail the inbound call. AudioSocket call_started still
+                    # owns the normal multi-attempt voice recovery after return.
+                    metrics["handshake_timeout"] += 1
+                    log.warning(
+                        "Inbound Discord prewarm not ready after %.2fs; allowing AudioSocket retry path",
+                        HANDSHAKE_WAIT_SECONDS,
+                    )
+
+            return web.json_response({"ok": True, "workspace_ids": wsids, "route_mode": mode})
+        except asyncio.CancelledError:
+            # FreePBX may abort CURL at its own deadline. Prewarm is an independent
+            # task and intentionally continues for the imminent AudioSocket leg.
+            raise
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
 
     cls.inbound_register = inbound_register
     BridgeManager._inbound_stability_guard = True
