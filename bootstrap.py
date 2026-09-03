@@ -19,6 +19,7 @@ from database_consolidation import apply as apply_database_consolidation
 from history_mirror import apply as apply_history_mirror
 from auto_redial_guard import apply as apply_auto_redial_guard
 from inbound_voice_guard import apply as apply_inbound_voice_guard
+from inbound_first_call_guard import apply as apply_inbound_first_call_guard
 from inbound_expiry_guard import apply as apply_inbound_expiry_guard
 from inbound_routing_guard import apply as apply_inbound_routing_guard
 
@@ -32,6 +33,7 @@ apply_database_consolidation()
 apply_history_mirror()
 apply_auto_redial_guard()
 apply_inbound_voice_guard()
+apply_inbound_first_call_guard()
 apply_inbound_expiry_guard()
 apply_inbound_routing_guard()
 runpy.run_path(str(Path(__file__).with_name("bot.py")), run_name="__main__")
