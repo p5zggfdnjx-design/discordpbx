@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import uuid
+from collections import deque
 from typing import Any
 
 from aiohttp import WSMsgType, web
@@ -57,7 +58,17 @@ def _basic_credentials(header: str) -> tuple[str, str]:
 
 
 class WebSocketMediaSession(PcmMediaSession):
-    """One true wideband Asterisk chan_websocket media channel."""
+    """One true wideband Asterisk chan_websocket media channel.
+
+    Asterisk 22.x can put one or more BINARY media messages on the wire before
+    the MEDIA_START control event is observed by the application.  Those frames
+    are legitimate startup media, not a protocol violation.  We keep only a
+    short tail while waiting for MEDIA_START so the call survives reordering
+    without creating seconds of catch-up latency.
+    """
+
+    MEDIA_START_TIMEOUT_SECONDS = 5.0
+    PRESTART_MEDIA_MAX_SECONDS = 0.5
 
     def __init__(self, ws: web.WebSocketResponse, request: web.Request, manager, config: MediaTransportConfig):
         requested_uuid = str(request.query.get("call_uuid", "")).strip()
@@ -91,10 +102,13 @@ class WebSocketMediaSession(PcmMediaSession):
         self._can_send.set()
         self._manager_started = False
         self._closed_by_us = False
+        self.prestart_media_frames = 0
+        self.prestart_media_bytes = 0
+        self.prestart_media_dropped_frames = 0
 
     def _accept_media_start(self, event: dict[str, Any]) -> None:
         if control_event(event) != "MEDIA_START":
-            raise RuntimeError("first chan_websocket control event must be MEDIA_START")
+            raise RuntimeError("expected chan_websocket MEDIA_START control event")
         fmt = str(event.get("format") or self.config.websocket_format).strip().lower()
         if fmt not in LINEAR_FORMAT_RATES:
             raise RuntimeError(
@@ -142,20 +156,66 @@ class WebSocketMediaSession(PcmMediaSession):
         if kind and kind != "INVALID":
             log.debug("Unhandled chan_websocket control event %s on %s", kind, self.call_uuid)
 
-    async def _wait_for_media_start(self) -> None:
+    def _prestart_limits(self) -> tuple[int, int]:
+        # Keep at most 500 ms of startup media.  This is enough to tolerate the
+        # ordering seen on Asterisk 22.6/22.7 without replaying a multi-second
+        # backlog after a delayed event loop.  Bound by both message count and
+        # bytes so a malformed peer cannot grow memory while withholding START.
+        ptime_ms = max(1, int(self.ptime or 20))
+        max_frames = max(1, int((self.PRESTART_MEDIA_MAX_SECONDS * 1000) / ptime_ms))
+        configured_frame = max(2, frame_bytes(self.config.websocket_rate))
+        return max_frames, max_frames * configured_frame
+
+    def _buffer_prestart_media(self, buffer: deque[bytes], payload: bytes) -> int:
+        if not payload:
+            return 0
+        max_frames, max_bytes = self._prestart_limits()
+        if len(payload) > max_bytes:
+            self.prestart_media_dropped_frames += 1
+            return 0
+
+        buffer.append(payload)
+        self.prestart_media_bytes += len(payload)
+        self.prestart_media_frames += 1
+
+        dropped = 0
+        while buffer and (len(buffer) > max_frames or self.prestart_media_bytes > max_bytes):
+            old = buffer.popleft()
+            self.prestart_media_bytes -= len(old)
+            self.prestart_media_frames -= 1
+            self.prestart_media_dropped_frames += 1
+            dropped += 1
+        return dropped
+
+    async def _wait_for_media_start(self) -> list[bytes]:
+        early_media: deque[bytes] = deque()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.MEDIA_START_TIMEOUT_SECONDS
+
         while self.active:
-            msg = await asyncio.wait_for(self.ws.receive(), timeout=5.0)
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError("Asterisk did not send MEDIA_START within startup timeout")
+            msg = await asyncio.wait_for(self.ws.receive(), timeout=remaining)
             if msg.type == WSMsgType.TEXT:
                 event = parse_control_message(msg.data)
                 if control_event(event) == "MEDIA_START":
                     self._accept_media_start(event)
-                    return
+                    return list(early_media)
                 await self._handle_control(msg.data)
             elif msg.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
                 raise ConnectionError("Asterisk WebSocket closed before MEDIA_START")
             elif msg.type == WSMsgType.BINARY:
-                raise RuntimeError("Asterisk sent media before MEDIA_START")
+                payload = bytes(msg.data)
+                self._buffer_prestart_media(early_media, payload)
         raise ConnectionError("media session closed before MEDIA_START")
+
+    def _consume_inbound_media(self, payload: bytes) -> None:
+        if not payload:
+            return
+        self.rx_packets += 1
+        self.rx_audio_bytes += len(payload)
+        self._feed_pbx_audio(payload, self.media_rx_rate)
 
     async def _sender(self) -> None:
         loop = asyncio.get_running_loop()
@@ -181,25 +241,34 @@ class WebSocketMediaSession(PcmMediaSession):
 
     async def run(self) -> None:
         try:
-            await self._wait_for_media_start()
+            early_media = await self._wait_for_media_start()
             accepted = await self.manager.call_started(self)
             if not accepted:
                 await self._send_hangup()
                 return
             self._manager_started = True
             log.info(
-                "WebSocket media call %s connected from %s format=%s rate=%dHz frame=%d",
-                self.call_uuid, self.peer, self.media_format, self.media_sample_rate, self.optimal_frame_size,
+                "WebSocket media call %s connected from %s format=%s rate=%dHz frame=%d prestart_frames=%d dropped=%d",
+                self.call_uuid,
+                self.peer,
+                self.media_format,
+                self.media_sample_rate,
+                self.optimal_frame_size,
+                len(early_media),
+                self.prestart_media_dropped_frames,
             )
+
+            # Only release startup media after MEDIA_START has proven the format
+            # and the manager has accepted/registered the call.  This preserves
+            # strict HD proof while tolerating Asterisk's observed wire ordering.
+            for payload in early_media:
+                self._consume_inbound_media(payload)
+
             self._sender_task = asyncio.create_task(self._sender(), name=f"ws-media-send-{self.call_uuid}")
 
             async for msg in self.ws:
                 if msg.type == WSMsgType.BINARY:
-                    payload = bytes(msg.data)
-                    if payload:
-                        self.rx_packets += 1
-                        self.rx_audio_bytes += len(payload)
-                        self._feed_pbx_audio(payload, self.media_rx_rate)
+                    self._consume_inbound_media(bytes(msg.data))
                 elif msg.type == WSMsgType.TEXT:
                     await self._handle_control(msg.data)
                 elif msg.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
