@@ -7,8 +7,10 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import voice_lifecycle
+# Import the public bridge first. bridge.py publishes its core primitives before
+# loading the native lifecycle subclass, which is the same order used in production.
 from bridge import BridgeManager
+import voice_lifecycle
 from voice_lifecycle import ReliableBridgeManager
 
 
