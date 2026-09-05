@@ -39,7 +39,15 @@ def test_stale_level_decays_to_inactive():
     }
 
 
-def test_meter_ui_injection_is_idempotent():
+def test_combine_uses_loudest_active_measurement():
+    out = audio_meter._combine([
+        {"rms_dbfs": -28.0, "peak_dbfs": -12.0, "active": True},
+        {"rms_dbfs": -18.0, "peak_dbfs": -4.0, "active": True},
+    ])
+    assert out == {"rms_dbfs": -18.0, "peak_dbfs": -4.0, "active": True}
+
+
+def test_meter_ui_injection_is_idempotent_and_contains_gain_mixer():
     page = '<html><head></head><body><div class="commandbar"></div></body></html>'
     once = audio_meter.inject_meter_ui(page)
     twice = audio_meter.inject_meter_ui(once)
@@ -48,3 +56,9 @@ def test_meter_ui_injection_is_idempotent():
     assert once.count('id="liveAudioMeterScript"') == 1
     assert 'PHONE → DISCORD' in once
     assert 'DISCORD → PHONE' in once
+    assert 'id="gainPhoneIn"' in once
+    assert 'id="gainDiscordOut"' in once
+    assert 'X-CSRF-Token' in once
+    assert '/api/operator/audio' in once
+    assert 'caller_to_discord_gain' in once
+    assert 'discord_to_caller_gain' in once
