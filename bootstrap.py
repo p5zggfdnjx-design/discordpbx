@@ -32,6 +32,7 @@ from history_mirror import apply as apply_history_mirror
 from inbound_routing_guard import apply as apply_inbound_routing_guard
 from inbound_stability_guard import apply as apply_inbound_stability_guard
 from matrix_ui import apply as apply_matrix_ui
+from media_smoothing_guard import apply as apply_media_smoothing_guard
 from prefix_blocks import apply as apply_prefix_blocks
 from reliability_guard import apply as apply_reliability_guard
 from request_compat import install_cached_request_body_compat as apply_request_compat
@@ -67,6 +68,10 @@ def apply_runtime_layers() -> None:
     # Runs after the meter wrapper so one status response contains actual call
     # levels, actual media transport/rates, and Python event-loop lag state.
     apply_runtime_observability()
+    # Production traces after v3.4.3 showed sub-second cut-outs with no lifecycle
+    # failure or >=1s event-loop stall. Add bounded playout cushions and keep the
+    # operator telemetry path from continually perturbing conference/runtime state.
+    apply_media_smoothing_guard()
 
     # Do NOT apply inbound_voice_guard, inbound_first_call_guard, or
     # inbound_expiry_guard. The canonical resilient manager owns connection,
