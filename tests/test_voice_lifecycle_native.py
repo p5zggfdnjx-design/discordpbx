@@ -12,6 +12,7 @@ from unittest.mock import patch
 from bridge import BridgeManager
 import voice_lifecycle
 from voice_lifecycle import ReliableBridgeManager
+from voice_resilience import VoiceResilientBridgeManager
 
 
 class Config:
@@ -169,7 +170,8 @@ def make_manager():
 
 class NativeVoiceArchitectureTests(unittest.TestCase):
     def test_public_bridge_uses_native_lifecycle_manager(self):
-        self.assertIs(BridgeManager, ReliableBridgeManager)
+        self.assertIs(BridgeManager, VoiceResilientBridgeManager)
+        self.assertTrue(issubclass(BridgeManager, ReliableBridgeManager))
 
     def test_inactive_session_does_not_keep_workspace_busy(self):
         manager, _, _ = make_manager()
