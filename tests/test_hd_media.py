@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import struct
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 from media_config import MediaTransportConfig
@@ -147,7 +148,20 @@ def test_auto_mode_selects_true_hd_when_secure_media_credentials_exist():
 def test_invalid_requested_format_does_not_silently_become_fake_hd():
     with patch.dict(os.environ, {"MEDIA_WS_FORMAT": "ulaw"}, clear=True):
         cfg = MediaTransportConfig.from_env()
-        # Unsupported values fail back to the project's actual PCM HD profile,
-        # never to an arbitrary relabeled sample rate.
         assert cfg.websocket_format == "slin16"
         assert cfg.websocket_rate == 16000
+
+
+def test_hd_startup_has_no_wideband_runtime_monkeypatch():
+    bootstrap = Path("bootstrap.py").read_text(encoding="utf-8")
+    assert "wideband_audio" not in bootstrap
+    assert "apply_wideband_audio" not in bootstrap
+    assert not Path("wideband_audio.py").exists()
+
+
+def test_freepbx_examples_use_per_call_websocket_slin16():
+    inbound = Path("freepbx/extensions_custom.conf.example").read_text(encoding="utf-8")
+    client = Path("freepbx/websocket_client.conf.example").read_text(encoding="utf-8")
+    assert "Dial(WebSocket/discordpbx_media/c(slin16)v(call_uuid=${BRIDGE_UUID}))" in inbound
+    assert "connection_type = per_call_config" in client
+    assert "protocols = media" in client
