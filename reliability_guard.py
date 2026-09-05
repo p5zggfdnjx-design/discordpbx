@@ -125,7 +125,7 @@ def _patch_appdb_revision_restore() -> None:
 
 
 def _patch_web_server() -> None:
-    import webui_v3
+    import webui as webui_v3
     from contact_recovery import contact_ownership_summary
 
     cls = webui_v3.WebControlServer
