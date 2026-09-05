@@ -25,6 +25,7 @@ from discord_sound_pack import apply as apply_discord_sound_pack
 from inbound_expiry_guard import apply as apply_inbound_expiry_guard
 from inbound_routing_guard import apply as apply_inbound_routing_guard
 from audio_meter import apply as apply_audio_meter
+from wideband_audio import apply as apply_wideband_audio
 from inbound_stability_guard import apply as apply_inbound_stability_guard
 
 apply_updater_hotfix()
@@ -43,6 +44,7 @@ apply_discord_sound_pack()
 apply_inbound_expiry_guard()
 apply_inbound_routing_guard()
 apply_audio_meter()
+apply_wideband_audio()
 # Must remain last: it synchronizes the fully wrapped prewarm path and rate-limits
 # the bundled hangup cue without bypassing any earlier call/expiry behavior.
 apply_inbound_stability_guard()
