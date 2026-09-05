@@ -1,6 +1,6 @@
 discord.py[voice]>=2.7.1,<3
 python-dotenv>=1.0,<2
 aiohttp>=3.10,<4
-git+https://github.com/imayhaveborkedit/discord-ext-voice-recv@699862aaf4988c67353403a37e40c93389306958
+git+https://github.com/rdphillips7/discord-ext-voice-recv@ddd28601fe556f585b869e215f29c8236b95f88f
 PyYAML>=6.0,<7
 cryptography>=43,<46
