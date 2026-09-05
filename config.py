@@ -126,7 +126,7 @@ class Config:
             ami_secret=os.getenv("ASTERISK_AMI_SECRET", "").strip(),
             ami_timeout=_float("ASTERISK_AMI_TIMEOUT", 5.0),
             ami_dial_context=os.getenv("ASTERISK_DIAL_CONTEXT", "from-internal").strip() or "from-internal",
-            ami_dial_timeout_ms=_int("ASTERISK_AMI_DIAL_TIMEOUT_MS", 45000),
+            ami_dial_timeout_ms=_int("ASTERISK_DIAL_TIMEOUT_MS", 45000),
             ami_caller_id=os.getenv("ASTERISK_CALLER_ID", "").strip(),
             ami_caller_id_options=_str_list("ASTERISK_CALLER_ID_OPTIONS"),
             allow_custom_caller_id=_bool("ALLOW_CUSTOM_CALLER_ID", False),
