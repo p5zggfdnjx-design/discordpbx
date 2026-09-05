@@ -82,7 +82,10 @@ class WebSocketMediaSession(PcmMediaSession):
         self.connection_id = ""
         self.optimal_frame_size = frame_bytes(self.media_sample_rate)
         self.ptime = 20
-        self.control_format = "plain-text"
+        # The Dial() target explicitly selects this with f(json) when requested.
+        # Do not infer it from optional MEDIA_START fields; commands sent back to
+        # Asterisk must use the exact control format selected for this call.
+        self.control_format = config.websocket_control_format
         self._sender_task: asyncio.Task | None = None
         self._can_send = asyncio.Event()
         self._can_send.set()
@@ -115,7 +118,6 @@ class WebSocketMediaSession(PcmMediaSession):
             self.ptime = int(event.get("ptime") or 20)
         except (TypeError, ValueError):
             self.ptime = 20
-        self.control_format = "json" if isinstance(event.get("channel_variables"), dict) else "plain-text"
 
     async def _handle_control(self, text: str) -> None:
         event = parse_control_message(text)
