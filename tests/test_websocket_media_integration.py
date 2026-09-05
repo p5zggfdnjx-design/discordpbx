@@ -91,40 +91,45 @@ class WebSocketMediaIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 headers=self._auth_header(),
                 protocols=("media",),
             )
-            await ws.send_str(
-                "MEDIA_START connection_id:test channel:WebSocket/discordpbx_media "
-                "channel_id:pbx-test format:slin16 optimal_frame_size:640 ptime:20"
-            )
-            await asyncio.wait_for(self.manager.started.wait(), timeout=1.0)
+            try:
+                await ws.send_str(
+                    "MEDIA_START connection_id:test channel:WebSocket/discordpbx_media "
+                    "channel_id:pbx-test format:slin16 optimal_frame_size:640 ptime:20"
+                )
+                await asyncio.wait_for(self.manager.started.wait(), timeout=1.0)
 
-            session = self.manager.session
-            self.assertIsNotNone(session)
-            self.assertEqual(session.call_uuid, call_uuid)
-            self.assertEqual(session.media_transport, "websocket")
-            self.assertEqual(session.media_format, "slin16")
-            self.assertEqual(session.media_rx_rate, 16000)
-            self.assertEqual(session.media_tx_rate, 16000)
-            self.assertTrue(session.media_wideband)
+                session = self.manager.session
+                self.assertIsNotNone(session)
+                self.assertEqual(session.call_uuid, call_uuid)
+                self.assertEqual(session.media_transport, "websocket")
+                self.assertEqual(session.media_format, "slin16")
+                self.assertEqual(session.media_rx_rate, 16000)
+                self.assertEqual(session.media_tx_rate, 16000)
+                self.assertTrue(session.media_wideband)
 
-            # The transport should immediately produce real 20 ms slin16 frames
-            # to Asterisk, even when Discord is currently silent.
-            outbound = await asyncio.wait_for(ws.receive(), timeout=1.0)
-            self.assertEqual(outbound.type, aiohttp.WSMsgType.BINARY)
-            self.assertEqual(len(outbound.data), 640)
+                # The transport should immediately produce real 20 ms slin16 frames
+                # to Asterisk, even when Discord is currently silent.
+                outbound = await asyncio.wait_for(ws.receive(), timeout=1.0)
+                self.assertEqual(outbound.type, aiohttp.WSMsgType.BINARY)
+                self.assertEqual(len(outbound.data), 640)
 
-            # Feed one 20 ms 16 kHz PBX frame back into DiscordPBX and confirm the
-            # canonical engine consumes the original 16 kHz PCM rather than an
-            # 8 kHz relabel/upscale path.
-            inbound = struct.pack("<h", 5000) * 320
-            await ws.send_bytes(inbound)
-            for _ in range(50):
-                if session.rx_audio_bytes >= len(inbound):
-                    break
-                await asyncio.sleep(0.01)
-            self.assertGreaterEqual(session.rx_audio_bytes, len(inbound))
-            self.assertGreaterEqual(self.manager.published_frames, 1)
+                # Stateful sample-rate conversion may produce a few fewer 48 kHz
+                # samples on its first call while the filter state initializes.
+                # Send two real 20 ms slin16 frames and assert that the canonical
+                # 48 kHz Discord frame is subsequently published without ever
+                # passing through an 8 kHz transport stage.
+                inbound = struct.pack("<h", 5000) * 320
+                await ws.send_bytes(inbound)
+                await ws.send_bytes(inbound)
+                for _ in range(100):
+                    if session.rx_audio_bytes >= len(inbound) * 2 and self.manager.published_frames >= 1:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertGreaterEqual(session.rx_audio_bytes, len(inbound) * 2)
+                self.assertGreaterEqual(self.manager.published_frames, 1)
+            finally:
+                await ws.close()
 
-            await ws.close()
             await asyncio.wait_for(self.manager.ended.wait(), timeout=1.0)
 
 
