@@ -39,5 +39,11 @@ jobs:
           PY
           node --check /tmp/discordpbx-updater-ui.js
           node --check /tmp/discordpbx-online-users.js
+      - name: Native voice lifecycle tests
+        run: python -m unittest -v tests.test_voice_lifecycle_native
+      - name: Inbound voice reliability tests
+        run: python -m unittest -v tests.test_inbound_reliability
+      - name: First-call voice tests
+        run: python -m unittest -v tests.test_inbound_first_call
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
