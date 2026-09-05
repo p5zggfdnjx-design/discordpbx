@@ -6,12 +6,11 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import inbound_voice_guard
 import inbound_routing_guard
 from bridge import BridgeManager
+import voice_lifecycle
 from workspace_service import WorkspaceService
 
-inbound_voice_guard.apply()
 inbound_routing_guard.apply()
 
 
@@ -70,12 +69,19 @@ class FakeVoiceChannel:
         self.name = "PBX"
         self.failures = failures
         self.connect_calls = 0
+        self.last_connect_kwargs = {}
 
     def __str__(self):
         return self.name
 
-    async def connect(self, cls=None, self_deaf=False, self_mute=False):
+    async def connect(self, cls=None, self_deaf=False, self_mute=False, reconnect=True):
         self.connect_calls += 1
+        self.last_connect_kwargs = {
+            "cls": cls,
+            "self_deaf": self_deaf,
+            "self_mute": self_mute,
+            "reconnect": reconnect,
+        }
         if self.failures > 0:
             self.failures -= 1
             raise RuntimeError("transient voice connect failure")
@@ -113,15 +119,30 @@ class FakeBot:
     def is_ready(self):
         return True
 
+    @property
+    def voice_clients(self):
+        return [self.guild.voice_client] if self.guild.voice_client else []
+
 
 class Config:
     inbound_chime_enabled = False
+    inbound_chime_file = ""
+    inbound_chime_gain = 1.0
     ami_dial_timeout_ms = 45000
     guild_id = 1
     voice_channel_id = 2
     text_channel_id = 0
     max_simultaneous_calls = 15
     leave_voice_after_call_seconds = 0
+    voice_connect_attempts = 3
+    voice_connect_timeout = 3.0
+    voice_ready_timeout = 3.0
+    voice_watchdog_interval = 2.0
+    voice_unhealthy_grace = 3.0
+    voice_worker_settle_timeout = 0.5
+    voice_worker_settle_poll = 0.01
+    inbound_pending_ttl = 30.0
+    inbound_voice_prewarm = True
 
 
 def make_manager(*, failures=0):
@@ -134,15 +155,20 @@ def make_manager(*, failures=0):
 
 
 class VoiceRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self):
+        manager = getattr(self, "manager", None)
+        if manager is not None:
+            await manager.close_voice_lifecycle()
+
     async def test_stale_voice_client_is_discarded_before_inbound_connect(self):
-        manager, guild, channel = make_manager()
+        self.manager, guild, channel = make_manager()
         stale = FakeVoiceClient(guild, channel, connected=False)
         guild.voice_client = stale
 
-        with patch.object(inbound_voice_guard.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
-            inbound_voice_guard.voice_recv, "VoiceRecvClient", FakeVoiceClient
+        with patch.object(voice_lifecycle.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
+            voice_lifecycle.voice_recv, "VoiceRecvClient", FakeVoiceClient
         ):
-            vc = await manager.ensure_voice("")
+            vc = await self.manager.ensure_voice("")
 
         self.assertIsNot(vc, stale)
         self.assertGreaterEqual(stale.disconnect_calls, 1)
@@ -150,35 +176,36 @@ class VoiceRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(vc.is_playing())
         self.assertTrue(vc.is_listening())
         self.assertEqual(channel.connect_calls, 1)
+        self.assertIs(channel.last_connect_kwargs["reconnect"], False)
 
     async def test_transient_voice_connect_failure_retries(self):
-        manager, _, channel = make_manager(failures=2)
-        with patch.object(inbound_voice_guard.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
-            inbound_voice_guard.voice_recv, "VoiceRecvClient", FakeVoiceClient
-        ), patch.object(inbound_voice_guard, "CONNECT_ATTEMPTS", 3):
-            vc = await manager.ensure_voice("")
+        self.manager, _, channel = make_manager(failures=2)
+        with patch.object(voice_lifecycle.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
+            voice_lifecycle.voice_recv, "VoiceRecvClient", FakeVoiceClient
+        ):
+            vc = await self.manager.ensure_voice("")
 
         self.assertTrue(vc.is_connected())
         self.assertEqual(channel.connect_calls, 3)
+        self.assertIs(channel.last_connect_kwargs["reconnect"], False)
 
     async def test_no_route_records_bridge_failure_and_cleans_pending(self):
-        manager, _, _ = make_manager()
+        self.manager, _, _ = make_manager()
         call_uuid = str(uuid.uuid4())
-        manager.prepare_inbound(call_uuid, "4075551212", "Caller", workspace_ids=[])
+        self.manager.prepare_inbound(call_uuid, "4075551212", "Caller", workspace_ids=[])
         events = []
 
         async def capture(event, payload):
             events.append((event, payload))
 
-        manager.event_callback = capture
+        self.manager.event_callback = capture
         session = SimpleNamespace(call_uuid=call_uuid, active=True)
-        ok = await manager.call_started(session)
+        ok = await self.manager.call_started(session)
 
         self.assertFalse(ok)
-        self.assertIsNone(manager.get_pending(call_uuid))
-        self.assertIsNone(manager.get_session(call_uuid))
-        self.assertEqual(manager.history[0]["event"], "bridge failed")
-        self.assertEqual(events[-1][0], "bridge_failed")
+        self.assertIsNone(self.manager.get_pending(call_uuid))
+        self.assertIsNone(self.manager.get_session(call_uuid))
+        self.assertEqual(self.manager.history[0]["event"], "connected")
 
 
 class PendingRegistrationTests(unittest.TestCase):

@@ -54,6 +54,15 @@ class Config:
     pbx_role_ids: set[int]
     auto_join_on_start: bool
     leave_voice_after_call_seconds: float
+    voice_connect_attempts: int
+    voice_connect_timeout: float
+    voice_ready_timeout: float
+    voice_watchdog_interval: float
+    voice_unhealthy_grace: float
+    voice_worker_settle_timeout: float
+    voice_worker_settle_poll: float
+    inbound_pending_ttl: float
+    inbound_voice_prewarm: bool
 
     audiosocket_bind: str
     audiosocket_port: int
@@ -98,7 +107,7 @@ class Config:
         if web_auth_mode not in {"discord", "basic", "none", "hybrid"}:
             web_auth_mode = "discord"
         return cls(
-            version="3.4.0",
+            version="3.4.1",
             data_dir=data_dir,
             discord_token=os.getenv("DISCORD_TOKEN", "").strip(),
             discord_client_id=os.getenv("DISCORD_CLIENT_ID", "").strip(),
@@ -110,6 +119,15 @@ class Config:
             pbx_role_ids=roles,
             auto_join_on_start=_bool("AUTO_JOIN_ON_START", False),
             leave_voice_after_call_seconds=max(0.0, _float("LEAVE_VOICE_AFTER_CALL_SECONDS", 20.0)),
+            voice_connect_attempts=max(1, min(6, _int("PBX_VOICE_CONNECT_ATTEMPTS", 3))),
+            voice_connect_timeout=max(3.0, min(30.0, _float("PBX_VOICE_CONNECT_TIMEOUT", 10.0))),
+            voice_ready_timeout=max(3.0, min(45.0, _float("PBX_VOICE_READY_TIMEOUT", 15.0))),
+            voice_watchdog_interval=max(0.5, min(15.0, _float("PBX_VOICE_WATCHDOG_INTERVAL", 2.0))),
+            voice_unhealthy_grace=max(1.0, min(15.0, _float("PBX_VOICE_UNHEALTHY_GRACE", 3.0))),
+            voice_worker_settle_timeout=max(0.1, min(10.0, _float("PBX_VOICE_WORKER_SETTLE_TIMEOUT", 2.5))),
+            voice_worker_settle_poll=max(0.01, min(0.5, _float("PBX_VOICE_WORKER_SETTLE_POLL", 0.05))),
+            inbound_pending_ttl=max(5.0, min(180.0, _float("PBX_INBOUND_PENDING_TTL", 30.0))),
+            inbound_voice_prewarm=_bool("PBX_INBOUND_VOICE_PREWARM", True),
 
             audiosocket_bind=os.getenv("AUDIOSOCKET_BIND", "0.0.0.0").strip() or "0.0.0.0",
             audiosocket_port=_int("AUDIOSOCKET_PORT", 9092),
