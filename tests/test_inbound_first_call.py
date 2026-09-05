@@ -5,12 +5,8 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-import inbound_first_call_guard
-import inbound_voice_guard
+import voice_lifecycle
 from bridge import BridgeManager
-
-inbound_voice_guard.apply()
-inbound_first_call_guard.apply()
 
 
 class FakeVoiceClient:
@@ -80,10 +76,12 @@ class FakeVoiceChannel:
         self.failures = int(failures)
         self.connect_calls = 0
         self.connect_started = asyncio.Event()
+        self.last_reconnect = None
 
-    async def connect(self, cls=None, self_deaf=False, self_mute=False):
+    async def connect(self, cls=None, self_deaf=False, self_mute=False, reconnect=True):
         self.connect_calls += 1
         self.connect_started.set()
+        self.last_reconnect = reconnect
         if self.failures > 0:
             self.failures -= 1
             raise RuntimeError("transient voice connect failure")
@@ -121,6 +119,10 @@ class FakeBot:
     def is_ready(self):
         return True
 
+    @property
+    def voice_clients(self):
+        return [self.guild.voice_client] if self.guild.voice_client else []
+
 
 class Config:
     inbound_chime_enabled = False
@@ -134,6 +136,15 @@ class Config:
     leave_voice_after_call_seconds = 0
     pbx_to_discord_gain = 1.0
     discord_to_pbx_gain = 1.0
+    voice_connect_attempts = 3
+    voice_connect_timeout = 3.0
+    voice_ready_timeout = 3.0
+    voice_watchdog_interval = 2.0
+    voice_unhealthy_grace = 3.0
+    voice_worker_settle_timeout = 2.5
+    voice_worker_settle_poll = 0.05
+    inbound_pending_ttl = 30.0
+    inbound_voice_prewarm = True
 
 
 def make_manager(*, delayed_workers=0, failures=0):
@@ -150,64 +161,66 @@ def make_manager(*, delayed_workers=0, failures=0):
 
 class FirstCallPickupTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
-        await asyncio.sleep(0)
+        manager = getattr(self, "manager", None)
+        if manager is not None:
+            await manager.close_voice_lifecycle()
 
     async def test_cold_voice_workers_get_settle_time_before_reconnect(self):
-        manager, guild, channel = make_manager(delayed_workers=3)
-        with patch.object(inbound_first_call_guard.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
-            inbound_first_call_guard.voice_recv, "VoiceRecvClient", FakeVoiceClient
-        ), patch.object(inbound_first_call_guard, "WORKER_SETTLE_TIMEOUT", 0.5), patch.object(
-            inbound_first_call_guard, "WORKER_SETTLE_POLL", 0.01
+        self.manager, guild, channel = make_manager(delayed_workers=3)
+        self.manager.config.voice_worker_settle_timeout = 0.5
+        self.manager.config.voice_worker_settle_poll = 0.01
+        with patch.object(voice_lifecycle.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
+            voice_lifecycle.voice_recv, "VoiceRecvClient", FakeVoiceClient
         ):
-            vc = await manager.ensure_voice("")
+            vc = await self.manager.ensure_voice("")
 
         self.assertIs(vc, guild.voice_client)
         self.assertTrue(vc.is_connected())
         self.assertTrue(vc.is_playing())
         self.assertTrue(vc.is_listening())
-        # The previous implementation checked after one event-loop turn and could
-        # tear down/reconnect this perfectly valid cold voice session.
         self.assertEqual(channel.connect_calls, 1)
-        await manager.disconnect_voice("")
+        self.assertIs(channel.last_reconnect, False)
+        await self.manager.disconnect_voice("")
 
     async def test_inbound_registration_starts_voice_prewarm(self):
-        manager, _, channel = make_manager()
-        manager._workspace_voice_config = lambda workspace_id="": (str(workspace_id), 1, 2, 0)
+        self.manager, _, channel = make_manager()
+        self.manager._workspace_voice_config = lambda workspace_id="": (str(workspace_id), 1, 2, 0)
         call_uuid = str(uuid.uuid4())
 
-        with patch.object(inbound_first_call_guard.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
-            inbound_first_call_guard.voice_recv, "VoiceRecvClient", FakeVoiceClient
+        with patch.object(voice_lifecycle.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
+            voice_lifecycle.voice_recv, "VoiceRecvClient", FakeVoiceClient
         ):
-            manager.prepare_inbound(call_uuid, "4075551212", "Caller", workspace_ids=["ws_main"])
+            self.manager.prepare_inbound(call_uuid, "4075551212", "Caller", workspace_ids=["ws_main"])
             await asyncio.wait_for(channel.connect_started.wait(), timeout=0.5)
-            tasks = list(manager._inbound_prewarm_tasks.values())
+            tasks = list(self.manager._inbound_prewarm_tasks.values())
             if tasks:
                 await asyncio.gather(*tasks)
 
         self.assertEqual(channel.connect_calls, 1)
-        self.assertIsNotNone(manager.get_pending(call_uuid))
-        self.assertEqual(manager._inbound_prewarm_successes.get("ws_main"), 1)
-        manager.cancel_pending(call_uuid)
-        await manager.disconnect_voice("ws_main")
+        self.assertIsNotNone(self.manager.get_pending(call_uuid))
+        self.assertEqual(self.manager._inbound_prewarm_successes.get("ws_main"), 1)
+        self.manager.cancel_pending(call_uuid)
+        await self.manager.disconnect_voice("ws_main")
 
     async def test_failed_prewarm_does_not_reject_pending_call(self):
-        manager, _, channel = make_manager(failures=6)
-        manager._workspace_voice_config = lambda workspace_id="": (str(workspace_id), 1, 2, 0)
+        self.manager, _, channel = make_manager(failures=6)
+        self.manager.config.voice_connect_attempts = 2
+        self.manager._workspace_voice_config = lambda workspace_id="": (str(workspace_id), 1, 2, 0)
         call_uuid = str(uuid.uuid4())
 
-        with patch.object(inbound_first_call_guard.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
-            inbound_first_call_guard.voice_recv, "VoiceRecvClient", FakeVoiceClient
-        ), patch.object(inbound_voice_guard, "CONNECT_ATTEMPTS", 2):
-            manager.prepare_inbound(call_uuid, "4075551212", "Caller", workspace_ids=["ws_main"])
+        with patch.object(voice_lifecycle.discord, "VoiceChannel", FakeVoiceChannel), patch.object(
+            voice_lifecycle.voice_recv, "VoiceRecvClient", FakeVoiceClient
+        ):
+            self.manager.prepare_inbound(call_uuid, "4075551212", "Caller", workspace_ids=["ws_main"])
             await asyncio.wait_for(channel.connect_started.wait(), timeout=0.5)
-            tasks = list(manager._inbound_prewarm_tasks.values())
+            tasks = list(self.manager._inbound_prewarm_tasks.values())
             if tasks:
                 await asyncio.gather(*tasks)
 
-        self.assertIsNotNone(manager.get_pending(call_uuid))
+        self.assertIsNotNone(self.manager.get_pending(call_uuid))
         self.assertEqual(channel.connect_calls, 2)
-        self.assertEqual(manager._inbound_prewarm_failures.get("ws_main"), 1)
-        manager.cancel_pending(call_uuid)
+        self.assertEqual(self.manager._inbound_prewarm_failures.get("ws_main"), 1)
+        self.manager.cancel_pending(call_uuid)
 
 
 if __name__ == "__main__":
