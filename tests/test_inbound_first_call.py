@@ -5,8 +5,8 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-import voice_lifecycle
 from bridge import BridgeManager
+import voice_lifecycle
 
 
 class FakeVoiceClient:
