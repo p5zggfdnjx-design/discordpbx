@@ -41,8 +41,12 @@ jobs:
           node --check /tmp/discordpbx-online-users.js
       - name: Native voice lifecycle tests
         run: python -m unittest -v tests.test_voice_lifecycle_native
-      - name: Voice reconnect/recovery tests
-        run: python -m unittest -v tests.test_inbound_reliability.VoiceRecoveryTests
+      - name: Replace stale voice client
+        run: python -m unittest -v tests.test_inbound_reliability.VoiceRecoveryTests.test_stale_voice_client_is_discarded_before_inbound_connect
+      - name: Retry transient voice connection
+        run: python -m unittest -v tests.test_inbound_reliability.VoiceRecoveryTests.test_transient_voice_connect_failure_retries
+      - name: Record no-route bridge failure
+        run: python -m unittest -v tests.test_inbound_reliability.VoiceRecoveryTests.test_no_route_records_bridge_failure_and_cleans_pending
       - name: Inbound pending expiry tests
         run: python -m unittest -v tests.test_inbound_reliability.PendingRegistrationTests
       - name: Inbound routing fallback tests
