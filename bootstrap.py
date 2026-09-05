@@ -35,6 +35,7 @@ from prefix_blocks import apply as apply_prefix_blocks
 from reliability_guard import apply as apply_reliability_guard
 from request_compat import install_cached_request_body_compat as apply_request_compat
 from runtime_hotfix import apply as apply_updater_hotfix
+from runtime_observability import apply as apply_runtime_observability
 
 
 def apply_runtime_layers() -> None:
@@ -56,6 +57,9 @@ def apply_runtime_layers() -> None:
     apply_discord_sound_pack()
     apply_inbound_routing_guard()
     apply_audio_meter()
+    # Runs after the meter wrapper so one status response contains actual call
+    # levels, actual media transport/rates, and Python event-loop lag state.
+    apply_runtime_observability()
 
     # Do NOT apply inbound_voice_guard, inbound_first_call_guard, or
     # inbound_expiry_guard. ReliableBridgeManager owns connection, reconnect,
