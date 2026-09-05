@@ -14,7 +14,7 @@ from inbound_routing_guard import apply as apply_inbound_routing_guard
 from inbound_stability_guard import apply as apply_inbound_stability_guard
 from matrix_ui import apply as apply_matrix_ui
 from reliability_guard import apply as apply_reliability_guard
-from request_compat import apply as apply_request_compat
+from request_compat import install_cached_request_body_compat as apply_request_compat
 from runtime_hotfix import apply as apply_runtime_hotfix
 
 
