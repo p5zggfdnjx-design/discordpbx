@@ -1,51 +1,44 @@
-from pathlib import Path
-import runpy
-import sys
+"""DiscordPBX runtime bootstrap.
 
-from updater.migrate_state import run as migrate_runtime_state
+Keeps compatibility-only feature layers isolated from the canonical bridge. The
+Discord voice connection lifecycle itself is first-class source architecture in
+``voice_lifecycle.py`` and is deliberately not patched at runtime.
+"""
 
-migrate_runtime_state()
-
-import webui
-sys.modules.setdefault("webui_v3", webui)
-
-from runtime_hotfix import apply as apply_updater_hotfix
-from github_release_guard import apply as apply_github_release_guard
-from matrix_ui import apply as apply_matrix_ui
-from prefix_blocks import apply as apply_prefix_blocks
-from contact_recovery import apply as apply_contact_recovery
-from reliability_guard import apply as apply_reliability_guard
-from global_contacts import apply as apply_global_contacts
-from database_consolidation import apply as apply_database_consolidation
-from history_mirror import apply as apply_history_mirror
 from auto_redial_guard import apply as apply_auto_redial_guard
-from inbound_voice_guard import apply as apply_inbound_voice_guard
-from inbound_first_call_guard import apply as apply_inbound_first_call_guard
+from database_consolidation import apply as apply_database_consolidation
+from discord_join_chime import apply as apply_discord_join_chime
 from discord_sound_pack import apply as apply_discord_sound_pack
-from inbound_expiry_guard import apply as apply_inbound_expiry_guard
+from github_release_guard import apply as apply_github_release_guard
 from inbound_routing_guard import apply as apply_inbound_routing_guard
-from audio_meter import apply as apply_audio_meter
 from inbound_stability_guard import apply as apply_inbound_stability_guard
+from matrix_ui import apply as apply_matrix_ui
+from reliability_guard import apply as apply_reliability_guard
+from request_compat import apply as apply_request_compat
+from runtime_hotfix import apply as apply_runtime_hotfix
 
-apply_updater_hotfix()
-apply_github_release_guard()
-apply_matrix_ui()
-apply_prefix_blocks()
-apply_contact_recovery()
-apply_reliability_guard()
-apply_global_contacts()
-apply_database_consolidation()
-apply_history_mirror()
-apply_auto_redial_guard()
-apply_inbound_voice_guard()
-apply_inbound_first_call_guard()
-apply_discord_sound_pack()
-apply_inbound_expiry_guard()
-apply_inbound_routing_guard()
-apply_audio_meter()
-# HD media is native in media_core.py + websocket_media.py. There is deliberately
-# no wideband runtime monkeypatch here.
-# Must remain last: it synchronizes the fully wrapped prewarm path and rate-limits
-# the bundled hangup cue without bypassing any earlier call/expiry behavior.
-apply_inbound_stability_guard()
-runpy.run_path(str(Path(__file__).with_name("bot.py")), run_name="__main__")
+
+def apply_runtime_layers() -> None:
+    # Voice connection ownership/prewarm/expiry/watchdog are native in
+    # ReliableBridgeManager. Do not reintroduce inbound_voice_guard,
+    # inbound_first_call_guard, or inbound_expiry_guard here: those older layers
+    # create multiple reconnect owners and were the source of reconnect storms.
+    apply_database_consolidation()
+    apply_reliability_guard()
+    apply_inbound_routing_guard()
+    apply_discord_join_chime()
+    apply_discord_sound_pack()
+    apply_request_compat()
+    apply_auto_redial_guard()
+    apply_github_release_guard()
+    apply_runtime_hotfix()
+    apply_matrix_ui()
+    apply_inbound_stability_guard()
+
+
+apply_runtime_layers()
+
+if __name__ == "__main__":
+    import runpy
+
+    runpy.run_module("bot", run_name="__main__")
