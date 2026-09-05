@@ -1,8 +1,9 @@
 """DiscordPBX runtime bootstrap.
 
 Preserves the established v3 migration/feature-layer order while keeping Discord
-voice connection ownership native in ``voice_lifecycle.py``. The legacy voice
-reconnect/prewarm/expiry monkeypatches are intentionally not applied here.
+voice connection ownership native in ``voice_lifecycle.py`` / ``voice_resilience.py``.
+The legacy voice reconnect/prewarm/expiry monkeypatches are intentionally not
+applied here.
 """
 
 from pathlib import Path
@@ -36,9 +37,15 @@ from reliability_guard import apply as apply_reliability_guard
 from request_compat import install_cached_request_body_compat as apply_request_compat
 from runtime_hotfix import apply as apply_updater_hotfix
 from runtime_observability import apply as apply_runtime_observability
+from voice_recv_compat import apply as apply_voice_recv_compat
 
 
 def apply_runtime_layers() -> None:
+    # Harden the third-party Discord receive router before any voice connection
+    # can start. This is packet-path compatibility only; connection/reconnect
+    # ownership remains in the canonical BridgeManager lifecycle.
+    apply_voice_recv_compat()
+
     # Keep the proven non-voice runtime stack intact. In particular, updater,
     # contact, history, number-block, database, and meter layers must not vanish
     # merely because the voice lifecycle moved from monkeypatches into source.
@@ -62,8 +69,9 @@ def apply_runtime_layers() -> None:
     apply_runtime_observability()
 
     # Do NOT apply inbound_voice_guard, inbound_first_call_guard, or
-    # inbound_expiry_guard. ReliableBridgeManager owns connection, reconnect,
-    # prewarm, pending TTL, watchdog, and idle departure as one state machine.
+    # inbound_expiry_guard. The canonical resilient manager owns connection,
+    # reconnect, prewarm, pending TTL, watchdog, fast worker repair, and idle
+    # departure as one state machine.
 
     # Must remain last: synchronizes the fully wrapped inbound path and limits
     # hangup-cue bursts without bypassing any earlier call/routing behavior.
