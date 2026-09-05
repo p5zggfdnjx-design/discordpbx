@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import inbound_routing_guard
-import voice_lifecycle
 from bridge import BridgeManager
+import voice_lifecycle
 from workspace_service import WorkspaceService
 
 inbound_routing_guard.apply()
