@@ -1,0 +1,17 @@
+; Asterisk websocket_client.conf example for DiscordPBX v3.4 true HD media.
+; Merge this stanza into /etc/asterisk/websocket_client.conf on the FreePBX host.
+; Do not expose DiscordPBX MEDIA_WS_PORT to the public Internet.
+;
+; The password MUST match MEDIA_WS_PASSWORD in DiscordPBX .env.
+
+[discordpbx_media]
+type = websocket_client
+uri = ws://BUILDER_IP:9093/media
+protocols = media
+username = discordpbx
+password = REPLACE_WITH_LONG_RANDOM_MEDIA_PASSWORD
+connection_type = per_call_config
+connection_timeout = 1000
+reconnect_interval = 250
+reconnect_attempts = 3
+tls_enabled = no

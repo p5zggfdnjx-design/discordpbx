@@ -1,5 +1,7 @@
-; Discord <-> FreePBX bridge test extension and inbound destination.
-; Replace BUILDER_IP, PBX_INGRESS_TOKEN, and AudioSocket port if needed.
+; Discord <-> FreePBX bridge — true wideband/HD path.
+; Requires Asterisk chan_websocket (20.16+, 21.11+, 22.6+, or 23+).
+; Configure [discordpbx_media] in websocket_client.conf using the companion example.
+; Replace BUILDER_IP and PBX_INGRESS_TOKEN below.
 ;
 ; FreePBX Custom Destination target for inbound routes:
 ;   discord-bridge,s,1
@@ -8,14 +10,29 @@
 exten => 9900,1,Goto(discord-bridge,s,1)
 
 [discord-bridge]
-exten => s,1,NoOp(Discord AudioSocket Bridge - caller ${CALLERID(all)})
+exten => s,1,NoOp(DiscordPBX HD WebSocket Bridge - caller ${CALLERID(all)})
  same => n,Set(BRIDGE_UUID=${UUID()})
  same => n,Set(DISCORD_CALL_UUID=${BRIDGE_UUID})
  ; Register metadata before Answer(). DiscordPBX uses this short callback window
  ; to start/prewarm the selected Discord voice destination while the carrier side
  ; can continue presenting normal ringing instead of answering into dead air.
- ; The request remains bounded: if the web service is stopped/restarting, the
- ; dialplan still proceeds to Answer()/AudioSocket rather than hanging forever.
+ same => n,Set(CURLOPT(conntimeout)=1)
+ same => n,Set(CURLOPT(timeout)=2)
+ same => n,Set(PBX_META=${CURL(http://BUILDER_IP:8088/api/pbx/inbound/register?token=PBX_INGRESS_TOKEN&uuid=${BRIDGE_UUID}&number=${CALLERID(num)})})
+ same => n,Answer()
+ ; slin16 is real 16 kHz signed-linear mono PCM. chan_websocket carries it end to
+ ; end between Asterisk and DiscordPBX without the 8 kHz AudioSocket() app limit.
+ ; Plain-text control is intentionally the compatibility default across every
+ ; supported chan_websocket release. Newer Asterisk may use f(json) if desired.
+ same => n,Dial(WebSocket/discordpbx_media/c(slin16)v(call_uuid=${BRIDGE_UUID}))
+ same => n,Hangup()
+
+; Emergency/rollback destination. This remains intentionally narrowband because
+; the standard AudioSocket() dialplan application is 8 kHz signed-linear PCM.
+[discord-bridge-legacy]
+exten => s,1,NoOp(DiscordPBX legacy AudioSocket fallback - caller ${CALLERID(all)})
+ same => n,Set(BRIDGE_UUID=${UUID()})
+ same => n,Set(DISCORD_CALL_UUID=${BRIDGE_UUID})
  same => n,Set(CURLOPT(conntimeout)=1)
  same => n,Set(CURLOPT(timeout)=2)
  same => n,Set(PBX_META=${CURL(http://BUILDER_IP:8088/api/pbx/inbound/register?token=PBX_INGRESS_TOKEN&uuid=${BRIDGE_UUID}&number=${CALLERID(num)})})

@@ -6,8 +6,10 @@ services:
     env_file:
       - .env
     ports:
-      # Asterisk AudioSocket. Keep this LAN-only; do not expose it publicly.
+      # Legacy Asterisk AudioSocket fallback. Keep LAN-only; do not expose publicly.
       - "${AUDIOSOCKET_PORT:-9092}:${AUDIOSOCKET_PORT:-9092}/tcp"
+      # Asterisk chan_websocket media for true wideband/HD audio. LAN-only.
+      - "${MEDIA_WS_PORT:-9093}:${MEDIA_WS_PORT:-9093}/tcp"
       # HTML control panel. Put this behind NPM for HTTPS.
       - "${WEB_PORT:-8088}:${WEB_PORT:-8088}/tcp"
     volumes:
